@@ -1,0 +1,40 @@
+текущая структура каталогов карты
+
+
+.android_secure  - folder
+DCIM      - camera folder
+LOST.DIR  - folder
+MERAMAN   - project folder
+   browser - browser files folder
+      xxx.png  - compass image
+      ...      - some other png files
+   .nomedia - file prevent mediascan   
+   map     - my map tiles folder
+      0/0/0.jpg - tile in folders
+      1/ - folders
+      ...
+      20/ - folders
+      nomap.jpg - nomap tile
+      creating.txt - map instruction text
+      MapPic.exe - Windows tile applicaton
+      MapView.exe - Windows map application
+
+Разработка структуры каталогов карты
+- корневой каталог
+  - каталог проекта
+    - файл .nomedia
+    - каталог файлов браузера
+      - файл компаса
+      - файл линейки масштаба
+      - другие файлы браузера
+    - каталог спутниковой карты
+      - файл nomap.jpg
+      - посторонние файлы
+    - каталог рисованной карты
+      - файл nomap.jpg
+      - посторонние файлы
+
+Тут надо указать имена файлов и каталогов.
+Тут надо поместить это описание структуры в подходящий файл кода проекта
+Надо снабдить описаниями элементы структуры, чтобы ясно было, почему они так устроены.
+ 

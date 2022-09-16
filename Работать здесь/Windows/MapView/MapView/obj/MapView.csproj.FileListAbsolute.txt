@@ -1,0 +1,8 @@
+C:\Documents and Settings\test\Мои документы\Visual Studio 2005\Projects\MapView\MapView\bin\Debug\MapView.exe
+C:\Documents and Settings\test\Мои документы\Visual Studio 2005\Projects\MapView\MapView\bin\Debug\MapView.pdb
+C:\Documents and Settings\test\Мои документы\Visual Studio 2005\Projects\MapView\MapView\obj\Debug\ResolveAssemblyReference.cache
+C:\Documents and Settings\test\Мои документы\Visual Studio 2005\Projects\MapView\MapView\obj\Debug\MapView.Form1.resources
+C:\Documents and Settings\test\Мои документы\Visual Studio 2005\Projects\MapView\MapView\obj\Debug\MapView.Properties.Resources.resources
+C:\Documents and Settings\test\Мои документы\Visual Studio 2005\Projects\MapView\MapView\obj\Debug\MapView.csproj.GenerateResource.Cache
+C:\Documents and Settings\test\Мои документы\Visual Studio 2005\Projects\MapView\MapView\obj\Debug\MapView.exe
+C:\Documents and Settings\test\Мои документы\Visual Studio 2005\Projects\MapView\MapView\obj\Debug\MapView.pdb

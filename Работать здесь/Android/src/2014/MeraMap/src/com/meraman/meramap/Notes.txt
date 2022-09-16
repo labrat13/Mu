@@ -1,0 +1,110 @@
+- Сделать пометки для готовых классов, чтобы проще было видеть, что уже сделано, а что еще нет
+
++ написать функциональные требования к версии и сценарии работы пользователя с программой. 
+  + сделано. Файл в проекте.
+
+- архитектура слишком сложная, ее можно упростить. После тестов прототипа надо посмотреть, как это сделать.
+  - код класса TileGrid перенести в MapTileView, а переменные, которые надо сохранить - в Activity. 
+
++ Как показать пользователю красивое окно с сообщением об ошибке типа мессагобокса?
+  - а потом что? Закрывать приложение или продолжать работу?
+    + внутри исключения - надо заранее до исключения загружать в память сообщение. А это значит, что надо все сообщения загружать в память при старте приложения.
+  + иконка нужна, а где ее брать и как ее показывать? 
+    - в папке /home/smith/ADT/sdk/platforms/android-16/data/res/drawable-mdpi лежит много полезных иконок
+    - ее надо загружать в память до исключения
+  - надо провести тесты выбранного метода
+
++ Обязательно ли вызывать Bitmap.recycle() чтобы освобождать память?
+  + не обязательно. GC сам уничтожит картинку, когда на нее не останется ссылок.
+  - но надо чтобы ссылок не оставалось.
+
+- Как перенести строку сообщения об исключении в ресурсы и стоит ли это делать, не лучше ли просто перевести все строки в приложении на другой язык?
+  - и динамически подгружать языки соответственно чему-то?
+  
+- Придумать как проверить, что можно писать на сдкарту
+
++ Узнать, как уничтожается File, если он не был открыт.
+  - ничего не сказано. видимо как обычно.
+  
++ Описать структуру и имена папок и файлов на сд-карте для всех предполагаемых типов карт
+  + сделано, в файле LocalTileStore
+
++ Решить, что должен показывать компас и где его разместить на экране
+  - для компаса найдена картинка, но не будет ли она слишком маленькой?
+  - положение от гпс красной стрелкой, а от компаса - синей? Гпс показывает направление движения, а компас - положение относительно севера.
+
+- boolean createProjectFolders() написать согласно структуре папок и каталогов.
+- Но сначала придумать, как будем разворачивать приложение на устройстве.
+
+- разработать создание сетки тил - разработан, но есть мелкие баги.
+
++ разработать скролинг сетки тил - сделано
+
++ разработать зум сетки тил в произвольной точке экрана
+  - сделано
+  
++ решить, как пользователь будет переключать типы карт
+  - из меню приложения
+  - как реализовать? заменой класса TileStore и перезапуском MainTileView
+
++ Как вызвать контекстное меню для моего приложения? И как с ним потом работать?
+  - длинным тапом в любом месте экрана будет вызываться, только его надо отдать системе.
+  - есть инструкции в документации как внедрить эту фичу
+  - пункты меню как обычно из ресурсов и ХМЛ
+  - меню надо изучать отдельно, это усложнит приложение, пока обойдемся без него
+
+  
++ Как получить положение устройства в пространстве в градусах с помощью датчиков и вычисления матриц?
+  - что-то сложная фигня тут...
+   - public static boolean getRotationMatrix (float[] R, float[] I, float[] gravity, float[] geomagnetic)
+     	R is an array of 9 floats holding the rotation matrix R when this function returns. R can be null.
+	I is an array of 9 floats holding the rotation matrix I when this function returns. I can be null.
+	gravity is an array of 3 floats containing the gravity vector expressed in the device's coordinate. You can simply use the values returned by a SensorEvent of a Sensor of type TYPE_ACCELEROMETER.
+	geomagnetic is an array of 3 floats containing the geomagnetic vector expressed in the device's coordinate. You can simply use the values returned by a SensorEvent of a Sensor of type TYPE_MAGNETIC_FIELD.
+	Returns true on success, false on failure (for instance, if the device is in free fall). On failure the output matrices are not modified.
+  - вроде можно использовать устаревший сенсор ориентации, но его показания зависят от ориентации экрана, предложены исправления для этого. 
+  - public static float[] getOrientation (float[] R, float[]  values)
+     Computes the device's orientation based on the rotation matrix.
+     When it returns, the array values is filled with the result:
+      values[0]: azimuth, rotation around the Z axis.
+      values[1]: pitch, rotation around the X axis.
+      values[2]: roll, rotation around the Y axis.
+
+     The reference coordinate-system used is different from the world coordinate-system defined for the rotation matrix:
+      X is defined as the vector product Y.Z (It is tangential to the ground at the device's current location and roughly points West).
+      Y is tangential to the ground at the device's current location and points towards the magnetic North Pole.
+      Z points towards the center of the Earth and is perpendicular to the ground.
+
+    All three angles above are in radians and positive in the counter-clockwise direction.
+    Parameters
+      R 	rotation matrix see getRotationMatrix(float[], float[], float[], float[]).
+      values 	an array of 3 floats to hold the result.
+    Returns array values passed as argument.
+
+    public static boolean remapCoordinateSystem (float[] inR, int X, int Y, float[] outR)
+     Rotates the supplied rotation matrix so it is expressed in a different coordinate system. This is typically used when an application needs to compute the three orientation angles of the device (see getOrientation(float[], float[])) in a different coordinate system.
+     When the rotation matrix is used for drawing (for instance with OpenGL ES), it usually doesn't need to be transformed by this function, unless the screen is physically rotated, in which case you can use Display.getRotation() to retrieve the current rotation of the screen. Note that because the user is generally free to rotate their screen, you often should consider the rotation in deciding the parameters to use here.
+     Examples:
+       Using the camera (Y axis along the camera's axis) for an augmented reality application where the rotation angles are needed:
+       remapCoordinateSystem(inR, AXIS_X, AXIS_Z, outR); 
+       Using the device as a mechanical compass when rotation is Surface.ROTATION_90:
+       remapCoordinateSystem(inR, AXIS_Y, AXIS_MINUS_X, outR); 
+       Beware of the above example. This call is needed only to account for a rotation from its natural orientation when calculating the rotation angles (see getOrientation(float[], float[])). If the rotation matrix is also used for rendering, it may not need to be transformed, for instance if your Activity is running in landscape mode. 
+       Since the resulting coordinate system is orthonormal, only two axes need to be specified.
+     Parameters
+     inR 	the rotation matrix to be transformed. Usually it is the matrix returned by getRotationMatrix(float[], float[], float[], float[]).
+     X 	defines on which world axis and direction the X axis of the device is mapped.
+     Y 	defines on which world axis and direction the Y axis of the device is mapped.
+     outR 	the transformed rotation matrix. inR and outR should not be the same array.
+     Returns true on success. false if the input parameters are incorrect, for instance if X and Y define the same axis. Or if inR and outR don't have the same length.
+
++ Придумать, как обрабатывать клики по экранным штукам
+  - если будет контекстное меню то незачем кликать по штукам
+
+- Следует ли ввести в приложение учет состояния батареи, или положимся на ОС в этом?
+
+- поскольку View приложения может пересоздаваться системой, то надо основные переменные 
+   либо хранить в экземпляре приложения, либо в контексте, который передается View.
+
+- как сохранять данные приложения между запусками?   
+  

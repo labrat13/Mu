@@ -1,0 +1,16 @@
+obj\Debug\ResolveAssemblyReference.cache
+obj\Debug\MapTileBright.Form1.resources
+obj\Debug\MapTileBright.Properties.Resources.resources
+obj\Debug\MapTileBright.csproj.GenerateResource.Cache
+bin\Debug\MapTileBright.exe
+bin\Debug\MapTileBright.pdb
+obj\Debug\MapTileBright.exe
+obj\Debug\MapTileBright.pdb
+bin\Release\MapTileBright.exe
+bin\Release\MapTileBright.pdb
+obj\Release\ResolveAssemblyReference.cache
+obj\Release\MapTileBright.Form1.resources
+obj\Release\MapTileBright.Properties.Resources.resources
+obj\Release\MapTileBright.csproj.GenerateResource.Cache
+obj\Release\MapTileBright.exe
+obj\Release\MapTileBright.pdb

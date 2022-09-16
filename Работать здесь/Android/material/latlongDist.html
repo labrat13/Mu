@@ -1,0 +1,1884 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta http-equiv="content-type" content="text/html; charset=UTF-8">
+<title>Calculate distance and bearing between two Latitude/Longitude points using haversine formula in JavaScript</title>
+<meta charset="utf-8">
+<meta name="author" content="Chris Veness, www.movable-type.co.uk">
+<meta name="keywords" content="latitude longitude distance bearing points earth haversine great circle rhumb">
+<link rel="stylesheet" href="latlongDist_files/mtl5.css">
+<link rel="stylesheet" href="latlongDist_files/prettify.css">
+<style>
+  body                { max-width: 64em; }
+  input               { text-align: right; width: 6em; }
+  input[type="radio"] { width: auto; vertical-align: baseline; }
+  a                   { cursor: pointer; }
+  figcaption          { font-size: 0.8em; font-style: italic; text-align: center; }
+  form ul.list        { list-style: inherit; } /* an actual list to appear within a form! */
+  fieldset            { padding: 0 2em; }
+  input               { background-color: #f0f0f0; }
+  output              { color: #000099; font-weight: bold; }
+  .inputs             { float: left; margin: 1em 2em 0 0; }
+  .outputs            { margin: 1em 2em 0 0; }
+  .map                { display: none; height: 480px; width: 480px; }
+  .radicand           { border-top: solid 1px #cccccc; }
+  pre.prettyprint     { border: none; }
+  .margin-l-0         { margin-left: 0; }
+  .label              { color: #666666; font-style: italic; }
+  aside {
+      border-top: 4px solid #cccccc;
+      border-bottom: 4px solid #cccccc;
+      float: right;
+      font-size: 0.85em;
+      line-height: 1.4;
+      margin-left: 1em;
+      padding: 0.5em;
+      width: 21em;
+  }
+
+</style>
+<!--[if lte IE 7]>
+<style> /* IE! sigh! */
+  ul    { position: relative; top: 0.5em; }
+  ul li { vertical-align: top; position: relative; top: -0.5em; }
+  ul li { max-width: none; }
+</style>
+<![endif]-->
+<!--[if lt IE 9]> <script src="http://html5shim.googlecode.com/svn/trunk/html5.js"></script> <![endif]-->
+<script style="" src="latlongDist_files/latlon.js">/* Latitude/Longitude formulae JavaScript implementation */</script>
+<script src="latlongDist_files/geo.js">/* Geodesy representation conversions */</script>
+<script src="latlongDist_files/js"> </script><script src="latlongDist_files/main.js" type="text/javascript"></script>
+<script src="latlongDist_files/jquery.js"></script>
+<script src="latlongDist_files/mtl.js">/* MTL utils */</script>
+<script src="latlongDist_files/prettify.js">/* google-code-prettify */</script>
+<script src="latlongDist_files/jquery_002.js">/* google-code-prettify */</script>
+<script>
+  var maps = { // note we have to track overlay items ourselves
+    orthoDist: { map:null, geodesic:true,  overlay: { marker1:null, marker2:null, path:null } },
+    orthoDest: { map:null, geodesic:true,  overlay: { marker1:null, marker2:null, path:null } },
+    rhumbDist: { map:null, geodesic:false, overlay: { marker1:null, marker2:null, path:null } },
+    rhumbDest: { map:null, geodesic:false, overlay: { marker1:null, marker2:null, path:null } }
+  };
+  var degFmt = $.cookie('latlon-degree-format') || 'dms';
+  
+  function drawPath(lat1, lon1, lat2, lon2, m) {
+    google.maps.event.trigger(m.map, 'resize');  // Gaaaaaah!
+    
+    // clear current overlays
+    if (m.overlay.marker1) { m.overlay.marker1.setMap(null); m.overlay.marker1 = null; }
+    if (m.overlay.marker2) { m.overlay.marker2.setMap(null); m.overlay.marker1 = null; }
+    if (m.overlay.path)    { m.overlay.path.setMap(null);    m.overlay.path = null; }
+    
+    // if supplied lat/long are all valid numbers, draw the path
+    if (!isNaN(lat1+lon1+lat2+lon2)) {
+      var p1 = new google.maps.LatLng(lat1, lon1);
+      var p2 = new google.maps.LatLng(lat2, lon2);
+      var sw = new google.maps.LatLng(Math.min(lat1, lat2), Math.min(lon1, lon2));
+      var ne = new google.maps.LatLng(Math.max(lat1, lat2), Math.max(lon1, lon2));
+      var bnds = new google.maps.LatLngBounds(sw, ne);
+      m.map.fitBounds(bnds);
+      m.overlay.marker1 = new google.maps.Marker({ map:m.map, position:p1, title:'Point 1'});   
+      m.overlay.marker2 = new google.maps.Marker({ map:m.map, position:p2, title:'Point 2'});   
+      m.overlay.path = new google.maps.Polyline({ map:m.map, path:[p1, p2], strokeColor:'#990000', geodesic:m.geodesic});
+    }
+  }
+
+  $(document).ready(function() {
+    // show source code
+    $.get('latlon.js', function(data) {
+      var src = data.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      $('#latlon-src').html(src);
+    });
+    $.get('geo.js', function(data) {
+      var src = data.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      $('#geo-src').html(src);
+    });
+    
+    // initialise maps
+    var mapOptions = {
+      zoom: 0,
+      center: new google.maps.LatLng(0, 0),
+      mapTypeId: google.maps.MapTypeId.HYBRID,
+      mapTypeControlOptions: {
+        style: google.maps.MapTypeControlStyle.DROPDOWN_MENU
+      },
+      navigationControlOptions: {
+        style: google.maps.NavigationControlStyle.SMALL
+      },
+      scaleControl: true
+    };
+    
+    // display preference
+    $('#degFormat'+degFmt).attr('checked', true);
+    
+    // ---- listeners for entered values & map displays
+    
+    // orthodrome distance / bearings / midpoint between two points
+    $('#ortho-dist input').change( function() { 
+      orthoDistCalc(); 
+      if ($('#map-ortho-dist-canvas').is(':visible')) orthoDistMap(); 
+    });
+    // toggle display of map
+    $('#ortho-dist .toggle-map a').click( function() {
+      if (!maps.orthoDist.map) {
+        var mapCanvas = document.getElementById("map-ortho-dist-canvas");
+        maps.orthoDist.map = new google.maps.Map(mapCanvas, mapOptions);
+      }
+      $('#ortho-dist .toggle-map').toggle();
+      $('#ortho-dist .map').toggle();
+      orthoDistMap();
+    });
+    
+    // orthodrome destination point from start point / bearing / distance
+    $('#ortho-dest input').change( function() { 
+      orthoDestCalc() 
+      if ($('#map-ortho-dest-canvas').is(':visible')) orthoDestMap(); 
+    });
+    // toggle display of map
+    $('#ortho-dest .toggle-map a').click( function() {
+      if (!maps.orthoDest.map) {
+        var mapCanvas = document.getElementById("map-ortho-dest-canvas");
+        maps.orthoDest.map = new google.maps.Map(mapCanvas, mapOptions);
+      }
+      $('#ortho-dest .toggle-map').toggle();
+      $('#ortho-dest .map').toggle();
+      orthoDestMap();
+    });
+    
+    // intersection of two paths
+    $('#intersect input').change( function() { 
+      intersecCalc() 
+    });
+    
+    // rhumb lines distance
+    $('#rhumb-dist input').change( function() { 
+      rhumbDistCalc() 
+      if ($('#map-rhumb-dist-canvas').is(':visible')) rhumbDistMap(); 
+    });
+    // toggle display of map
+    $('#rhumb-dist .toggle-map a').click( function() {
+      if (!maps.orthoDest.map) {
+        var mapCanvas = document.getElementById("map-rhumb-dist-canvas");
+        maps.rhumbDist.map = new google.maps.Map(mapCanvas, mapOptions);
+      }
+      $('#rhumb-dist .toggle-map').toggle();
+      $('#rhumb-dist .map').toggle();
+      rhumbDistMap();
+    });
+    
+    // rhumb lines destination
+    $('#rhumb-dest input').change( function() { 
+      rhumbDestCalc() 
+      if ($('#map-rhumb-dest-canvas').is(':visible')) rhumbDestMap(); 
+    });
+    // toggle display of map
+    $('#rhumb-dest .toggle-map a').click( function() {
+      if (!maps.orthoDest.map) {
+        var mapCanvas = document.getElementById("map-rhumb-dest-canvas");
+        maps.rhumbDest.map = new google.maps.Map(mapCanvas, mapOptions);
+      }
+      $('#rhumb-dest .toggle-map').toggle();
+      $('#rhumb-dest .map').toggle();
+      rhumbDestMap();
+    });
+    
+    
+    // deg-min-sec / decimal degrees conversion
+    $('#latDMS').change( function() { $('#latDec').val(Geo.parseDMS($('#latDMS').val()).toFixed(5)); });
+    $('#lonDMS').change( function() { $('#lonDec').val(Geo.parseDMS($('#lonDMS').val()).toFixed(5)); });
+    $('#latDec').change( function() { $('#latDMS').val(Geo.toLat($('#latDec').val(),'dms',1)); });
+    $('#lonDec').change( function() { $('#lonDMS').val(Geo.toLon($('#lonDec').val(),'dms',1)); });
+    
+    // set display of bearings to user's preference
+    $('input[name="degFormat"]').change(function() { 
+      $.cookie('latlon-degree-format', degFmt = $(this).val())
+      orthoDistCalc();  
+      orthoDestCalc();
+      rhumbDistCalc();
+      rhumbDestCalc();
+      intersecCalc();
+    });
+    
+    // initial values calculations
+    orthoDistCalc();  
+    orthoDestCalc();
+    rhumbDistCalc();
+    rhumbDestCalc();
+    intersecCalc();
+    
+    prettyPrint();
+    
+  });
+  
+  // functions to perform calculatios illustration operation of code
+  
+  // note that in place of the standard use of id to identify input fields,
+  // fields are here identified by form id + field class name
+    
+  function orthoDistCalc() {
+    var lat1 = Geo.parseDMS($('#ortho-dist .lat1').val());
+    var lon1 = Geo.parseDMS($('#ortho-dist .lon1').val());
+    var lat2 = Geo.parseDMS($('#ortho-dist .lat2').val());
+    var lon2 = Geo.parseDMS($('#ortho-dist .lon2').val());
+    var p1 = new LatLon(lat1, lon1);
+    var p2 = new LatLon(lat2, lon2);
+    $('#ortho-dist .result-dist').html(p1.distanceTo(p2));
+    $('#ortho-dist .result-brng1').html(Geo.toBrng(p1.bearingTo(p2),degFmt));
+    $('#ortho-dist .result-brng2').html(Geo.toBrng(p1.finalBearingTo(p2),degFmt));
+    $('#ortho-dist .result-midpt').html(p1.midpointTo(p2).toString(degFmt));
+  }
+  
+  function orthoDistMap() {
+    var lat1 = Geo.parseDMS($('#ortho-dist .lat1').val());
+    var lon1 = Geo.parseDMS($('#ortho-dist .lon1').val());
+    var lat2 = Geo.parseDMS($('#ortho-dist .lat2').val());
+    var lon2 = Geo.parseDMS($('#ortho-dist .lon2').val());
+    drawPath(lat1, lon1, lat2, lon2, maps.orthoDist);
+  }
+  
+  function orthoDestCalc() {
+    var latStart = Geo.parseDMS($('#ortho-dest .lat1').val());
+    var lonStart = Geo.parseDMS($('#ortho-dest .lon1').val())
+    var brng = Geo.parseDMS($('#ortho-dest .brng').val());
+    var dist = $('#ortho-dest .dist').val();
+    var p1 = new LatLon(latStart, lonStart);
+    var p2 = p1.destinationPoint(brng, dist);
+    var brngFinal = p1.finalBearingTo(p2);
+    $('#ortho-dest .result-point').html(p2.toString(degFmt));
+    $('#ortho-dest .result-brng').html(Geo.toBrng(brngFinal,degFmt));
+  }
+  
+  function orthoDestMap() {
+    var lat1 = Geo.parseDMS($('#ortho-dest .lat1').val());
+    var lon1 = Geo.parseDMS($('#ortho-dest .lon1').val());
+    var brng = Geo.parseDMS($('#ortho-dest .brng').val());
+    var dist = $('#ortho-dest .dist').val();
+    var p1 = new LatLon(lat1, lon1);
+    var p2 = p1.destinationPoint(brng, dist);
+    lat2 = p2.lat;
+    lon2 = p2.lon;
+    drawPath(lat1, lon1, lat2, lon2, maps.orthoDest);
+  }
+  
+  function rhumbDistCalc() {
+    var lat1 = Geo.parseDMS($('#rhumb-dist .lat1').val());
+    var lon1 = Geo.parseDMS($('#rhumb-dist .lon1').val());
+    var lat2 = Geo.parseDMS($('#rhumb-dist .lat2').val());
+    var lon2 = Geo.parseDMS($('#rhumb-dist .lon2').val());
+    var p1 = new LatLon(lat1, lon1);
+    var p2 = new LatLon(lat2, lon2);
+    $('#rhumb-dist .result-dist').html(p1.rhumbDistanceTo(p2));
+    $('#rhumb-dist .result-brng').html(Geo.toBrng(p1.rhumbBearingTo(p2),degFmt));
+    $('#rhumb-dist .result-midpt').html(p1.rhumbMidpointTo(p2).toString(degFmt));
+  }
+  
+  function rhumbDistMap() {
+    var lat1 = Geo.parseDMS($('#rhumb-dist .lat1').val());
+    var lon1 = Geo.parseDMS($('#rhumb-dist .lon1').val());
+    var lat2 = Geo.parseDMS($('#rhumb-dist .lat2').val());
+    var lon2 = Geo.parseDMS($('#rhumb-dist .lon2').val());
+    drawPath(lat1, lon1, lat2, lon2, maps.rhumbDist);
+  }
+  
+  function rhumbDestCalc() {
+    var lat1 = Geo.parseDMS($('#rhumb-dest .lat1').val());
+    var lon1 = Geo.parseDMS($('#rhumb-dest .lon1').val());
+    var p1 = new LatLon(lat1, lon1);
+    var brng = Geo.parseDMS($('#rhumb-dest .brng').val());
+    var dist = $('#rhumb-dest .dist').val();
+    var p2 = p1.rhumbDestinationPoint(brng, dist);
+    $('#rhumb-dest .result-point').html(p2.toString(degFmt));
+  }
+  
+  function rhumbDestMap() {
+    var lat1 = Geo.parseDMS($('#rhumb-dest .lat1').val());
+    var lon1 = Geo.parseDMS($('#rhumb-dest .lon1').val());
+    var p1 = new LatLon(lat1, lon1);
+    var brng = Geo.parseDMS($('#rhumb-dest .brng').val());
+    var dist = $('#rhumb-dest .dist').val();
+    var p2 = p1.rhumbDestinationPoint(brng, dist);
+    lat2 = p2.lat;
+    lon2 = p2.lon;
+    drawPath(lat1, lon1, lat2, lon2, maps.rhumbDest);
+  }
+  
+  function intersecCalc() {
+    var lat1 = Geo.parseDMS($('#intersect .lat1').val());
+    var lon1 = Geo.parseDMS($('#intersect .lon1').val());
+    var lat2 = Geo.parseDMS($('#intersect .lat2').val());
+    var lon2 = Geo.parseDMS($('#intersect .lon2').val());
+    var p1 = new LatLon(lat1, lon1);
+    var p2 = new LatLon(lat2, lon2);
+    var brng1 = Geo.parseDMS($('#intersect .brng1').val());
+    var brng2 = Geo.parseDMS($('#intersect .brng2').val());
+    var pInt = LatLon.intersection(p1, brng1, p2, brng2);
+    $('#intersect .result-point').html(pInt==null ? '' : pInt.toString(degFmt));
+  }
+  
+</script>
+<script src="latlongDist_files/commonutilstats.js" charset="UTF-8" type="text/javascript"></script></head>
+<body>
+<header> <a href="http://www.movable-type.co.uk/"><img src="latlongDist_files/mtl.gif" alt="MTL logo" height="120" width="120"></a>
+  <h1>Movable Type Scripts</h1>
+  <hr>
+  <h2>Calculate distance, bearing and more between Latitude/Longitude points</h2>
+</header>
+
+
+
+<p>This page presents a variety of calculations for latitude/longitude points, with the formulæ
+  and code fragments for implementing them.</p>
+<p>All these formulæ are for calculations on the basis of a spherical earth  (ignoring ellipsoidal
+  effects) – which is accurate enough<sup><a href="#ellipsoid" title="see notes">*</a></sup> for most purposes…
+[In fact, the earth is very slightly ellipsoidal; using a spherical model gives errors typically up to
+0.3% – see notes for further details].</p>
+
+<form name="ortho-dist" id="ortho-dist">
+<fieldset><legend>Great-circle distance between two points</legend>
+  <p>Enter the co-ordinates into the text boxes to try  out the calculations. A variety
+    of formats are accepted, principally:</p>
+  <ul class="list">
+    <li>deg-min-sec suffixed with N/S/E/W (e.g. 40°44′55″N, 73 59 11W), or </li>
+    <li>signed decimal degrees without compass direction, where negative indicates west/south (e.g. 40.7486, -73.9864):</li>
+  </ul>
+  <table class="inputs">
+    <tbody><tr>
+      <td>Point 1:</td>
+      <td>
+        <input name="lat1" class="lat1" value="50 03 59N" placeholder="Lat 1 (ºN/S)" title="Lat 1 (ºN/S)" required="" type="text">
+        , 
+        <input name="lon1" class="lon1" value="005 42 53W" placeholder="Lon 1 (ºE/W)" title="Lon 1 (ºE/W)" required="" type="text">
+      </td>
+    </tr>
+    <tr>
+      <td>Point 2:</td>
+      <td>
+        <input name="lat2" class="lat2" value="58 38 38N" placeholder="Lat 2 (ºN/S)" title="Lat 2 (ºN/S)" required="" type="text">
+        , 
+        <input name="lon2" class="lon2" value="003 04 12W" placeholder="Lon 2 (ºE/W)" title="Lon 2 (ºE/W)" required="" type="text">
+      </td>
+    </tr>
+  </tbody></table>
+  <table class="outputs">
+    <tbody><tr>
+      <td>Distance:</td>
+      <td><output class="result-dist" title="Distance (in km)">968.9</output> km
+          <span title="rounding to 4 significant figures reflects the approx. 0.3% accuracy of the spherical model" class="small grey">(to 4 SF<sup>*</sup>)</span></td>
+    </tr>
+    <tr>
+      <td>Initial bearing:</td>
+      <td><output class="result-brng1" title="Initial bearing (azimuth) between points">009°07′11″</output></td>
+    </tr>
+    <tr>
+      <td>Final bearing:</td>
+      <td><output class="result-brng2" title="Final bearing (azimuth) between points">011°16′31″</output></td>
+    </tr>
+    <tr>
+      <td>Midpoint:</td>
+      <td><output class="result-midpt" title="Midpoint between points">54°21′44″N, 004°31′50″W</output></td>
+    </tr>
+  </tbody></table>
+  <p class="toggle-map">And you can <a>see it on a map</a> (aren’t those  Google guys wonderful!)</p>
+  <p class="toggle-map hidden"><a>... hide map</a></p>
+  <div id="map-ortho-dist-canvas" class="map"></div>
+</fieldset>
+</form>
+
+
+<h3>Distance</h3>
+
+<p>This  uses the ‘<b>haversine</b>’ formula to calculate the great-circle distance between
+    two points – that is, the shortest distance over the earth’s surface – giving an ‘as-the-crow-flies’
+    distance between the  points (ignoring any hills they fly over, of course!).</p>
+<table>
+  <tbody><tr id="haversine"> 
+    <td class="label">Haversine<br>formula:</td>
+    <td class="formula">
+        a = sin²(Δφ/2) + cos(φ<sub>1</sub>)⋅cos(φ<sub>2</sub>)⋅sin²(Δλ/2)<br>
+      c = 2⋅atan2(√<span class="radicand">a</span>, √<span class="radicand">(1−a)</span>)<br>
+    d = R⋅c</td>
+  </tr>
+  <tr>
+    <td class="label align-right">where</td>
+    <td><i>φ is latitude, λ is longitude, R is earth’s radius (mean radius = 6,371km);<br>
+        note that angles need to be in radians to pass to trig functions!</i></td>
+  </tr>
+  <tr>
+    <td class="label">JavaScript:</td>
+    <td><pre class="code prettyprint margin-l-0"><span class="kwd">var</span><span class="pln"> R </span><span class="pun">=</span><span class="pln"> </span><span class="lit">6371</span><span class="pun">;</span><span class="pln"> </span><span class="com">// km</span><span class="pln">
+</span><span class="kwd">var</span><span class="pln"> </span><span class="pun">φ</span><span class="lit">1</span><span class="pln"> </span><span class="pun">=</span><span class="pln"> lat1</span><span class="pun">.</span><span class="pln">toRadians</span><span class="pun">();</span><span class="pln">
+</span><span class="kwd">var</span><span class="pln"> </span><span class="pun">φ</span><span class="lit">2</span><span class="pln"> </span><span class="pun">=</span><span class="pln"> lat2</span><span class="pun">.</span><span class="pln">toRadians</span><span class="pun">();</span><span class="pln">
+</span><span class="kwd">var</span><span class="pln"> </span><span class="pun">Δφ</span><span class="pln"> </span><span class="pun">=</span><span class="pln"> </span><span class="pun">(</span><span class="pln">lat2</span><span class="pun">-</span><span class="pln">lat1</span><span class="pun">).</span><span class="pln">toRadians</span><span class="pun">();</span><span class="pln">
+</span><span class="kwd">var</span><span class="pln"> </span><span class="pun">Δλ</span><span class="pln"> </span><span class="pun">=</span><span class="pln"> </span><span class="pun">(</span><span class="pln">lon2</span><span class="pun">-</span><span class="pln">lon1</span><span class="pun">).</span><span class="pln">toRadians</span><span class="pun">();</span><span class="pln">
+
+</span><span class="kwd">var</span><span class="pln"> a </span><span class="pun">=</span><span class="pln"> </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">sin</span><span class="pun">(Δφ/</span><span class="lit">2</span><span class="pun">)</span><span class="pln"> </span><span class="pun">*</span><span class="pln"> </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">sin</span><span class="pun">(Δφ/</span><span class="lit">2</span><span class="pun">)</span><span class="pln"> </span><span class="pun">+</span><span class="pln">
+        </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">cos</span><span class="pun">(φ</span><span class="lit">1</span><span class="pun">)</span><span class="pln"> </span><span class="pun">*</span><span class="pln"> </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">cos</span><span class="pun">(φ</span><span class="lit">2</span><span class="pun">)</span><span class="pln"> </span><span class="pun">*</span><span class="pln">
+        </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">sin</span><span class="pun">(Δλ/</span><span class="lit">2</span><span class="pun">)</span><span class="pln"> </span><span class="pun">*</span><span class="pln"> </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">sin</span><span class="pun">(Δλ/</span><span class="lit">2</span><span class="pun">);</span><span class="pln">
+</span><span class="kwd">var</span><span class="pln"> c </span><span class="pun">=</span><span class="pln"> </span><span class="lit">2</span><span class="pln"> </span><span class="pun">*</span><span class="pln"> </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">atan2</span><span class="pun">(</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">sqrt</span><span class="pun">(</span><span class="pln">a</span><span class="pun">),</span><span class="pln"> </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">sqrt</span><span class="pun">(</span><span class="lit">1</span><span class="pun">-</span><span class="pln">a</span><span class="pun">));</span><span class="pln">
+
+</span><span class="kwd">var</span><span class="pln"> d </span><span class="pun">=</span><span class="pln"> R </span><span class="pun">*</span><span class="pln"> c</span><span class="pun">;</span></pre></td>
+  </tr>
+</tbody></table>
+
+<p><i>Note in these scripts, I generally use lat/lon for latitude/longitude in degrees, and φ/λ for latitude/longitude in radians
+    – having found that mixing degrees &amp; radians is often the easiest route to head-scratching bugs...</i></p>
+
+<aside><p><i>Historical aside</i>:
+    The height of tech­nology for navigator’s calculations used to be 
+log tables.
+    As there is no (real) log of a negative number, the ‘versine’ 
+enabled them to keep trig func­tions in positive numbers.
+    Also, the sin²(θ/2) form of the haversine avoided addition (which 
+en­tailed an anti-log lookup, the addi­tion, and a log lookup).
+    Printed <a target="_blank" href="http://haversine.files.wordpress.com/2012/08/haversines.jpg">tables</a> for the haver­sine/in­verse-haver­sine
+    (and its logarithm, to aid multip­lica­tions) saved navi­gators from
+    squaring sines, com­puting square roots, etc – arduous and error-prone activ­ities.</p>
+</aside>
+
+<p>The <a target="_blank" href="http://en.wikipedia.org/wiki/Haversine_formula">haversine</a> formula<sup><a target="_blank" href="http://mathforum.org/library/drmath/view/51879.html">1</a></sup>
+    ‘remains particularly well-conditioned for numerical computa­tion even at small distances’
+    – unlike calculations based on the <span title="cos c = cos a cos b + sin a sin b cos C"><i>spherical
+    law of cosines</i></span>. The ‘versed sine’ is <span class="formula">1−cosθ</span>, and the ‘half-versed-sine’ is
+    <span class="formula">(1−cosθ)/2 = sin²(θ/2)</span> as used above.
+    Once widely used by navigators, it was described by Roger Sinnott in
+    <a target="_blank" href="https://www.shopatsky.com/product/sky-and-telescope-august-1984-digital-issue/sky-and-telescope-digital-issues-1980-1989"><i>Sky &amp; Telescope</i></a>
+    magazine in 1984 (“Virtues of the Haversine”):
+    Sinnott explained that the angular separation between Mizar and Alcor in Ursa Major – 0°11′49.69″ –
+    could be accurately calculated on a <a target="_blank" href="http://en.wikipedia.org/wiki/TRS-80#modeliii">TRS-80</a> using the haversine.</p>
+<p>For the curious, <i>c</i> is the angular distance in radians,
+    and <i>a</i> is the square of half the chord length between the points.
+    A (remarkably marginal) performance improvement can be obtained,
+    of course, by factoring out the terms which get squared.</p>
+
+<h4 id="cosine-law">Spherical Law of Cosines</h4>
+
+<p>In fact, JavaScript (and most modern computers &amp; languages) use ‘IEEE 754’ 64-bit floating-point numbers,
+    which provide 15 significant figures of precision.
+    By my estimate, with this precision, the simple
+    <a target="_blank" href="http://mathworld.wolfram.com/SphericalTrigonometry.html">spherical
+    law of cosines</a> formula (cos <i>c</i> = cos <i>a</i> cos <i>b</i> + sin <i>a</i> sin <i>b</i> cos <i>C</i>) gives well-conditioned
+    results down to distances as small as a few metres on the Earth’s surface.
+    <span class="note">(<i>Note that the geodetic form of the law of cosines is rearranged
+    from the canonical one so that the latitude can be used directly, rather than the
+    <a target="_blank" href="http://mathworld.wolfram.com/Colatitude.html">colatitude</a></i>).</span></p>
+<p>This makes the simpler law of cosines a reasonable 1-line alternative
+ to the haversine
+  formula for many purposes. The choice may be driven by coding context,
+  available
+  trig functions (in different languages), etc – and, for very small 
+distances an equirectangualar approximation may be more suitable.</p>
+  
+<table>
+  <tbody><tr> 
+    <td class="label">Law of cosines:</td>
+    <td class="formula">d = 
+      acos( sin(φ<sub>1</sub>)⋅sin(φ<sub>2</sub>) + cos(φ<sub>1</sub>)⋅cos(φ<sub>2</sub>)⋅cos(Δλ) ) ⋅ R</td>
+  </tr>
+  <tr>
+    <td class="label">JavaScript:</td>
+    <td><pre class="code prettyprint margin-l-0"><span class="kwd">var</span><span class="pln"> </span><span class="pun">φ</span><span class="lit">1</span><span class="pln"> </span><span class="pun">=</span><span class="pln"> lat1</span><span class="pun">.</span><span class="pln">toRadians</span><span class="pun">(),</span><span class="pln"> </span><span class="pun">φ</span><span class="lit">2</span><span class="pln"> </span><span class="pun">=</span><span class="pln"> lat2</span><span class="pun">.</span><span class="pln">toRadians</span><span class="pun">(),</span><span class="pln"> </span><span class="pun">Δλ</span><span class="pln"> </span><span class="pun">=</span><span class="pln"> </span><span class="pun">(</span><span class="pln">lon2</span><span class="pun">-</span><span class="pln">lon1</span><span class="pun">).</span><span class="pln">toRadians</span><span class="pun">(),</span><span class="pln"> R </span><span class="pun">=</span><span class="pln"> </span><span class="lit">6371</span><span class="pun">;</span><span class="pln"> </span><span class="com">// gives d in km</span><span class="pln">
+</span><span class="kwd">var</span><span class="pln"> d </span><span class="pun">=</span><span class="pln"> </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">acos</span><span class="pun">(</span><span class="pln"> </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">sin</span><span class="pun">(φ</span><span class="lit">1</span><span class="pun">)*</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">sin</span><span class="pun">(φ</span><span class="lit">2</span><span class="pun">)</span><span class="pln"> </span><span class="pun">+</span><span class="pln"> </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">cos</span><span class="pun">(φ</span><span class="lit">1</span><span class="pun">)*</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">cos</span><span class="pun">(φ</span><span class="lit">2</span><span class="pun">)</span><span class="pln"> </span><span class="pun">*</span><span class="pln"> </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">cos</span><span class="pun">(Δλ)</span><span class="pln"> </span><span class="pun">)</span><span class="pln"> </span><span class="pun">*</span><span class="pln"> R</span><span class="pun">;</span></pre></td>
+  </tr>
+    <tr>
+        <td class="label">Excel:</td>
+        <td class="code">=ACOS(SIN(lat1)*SIN(lat2)+COS(lat1)*COS(lat2)*COS(lon2-lon1))*6371</td>
+    </tr>
+    <tr>
+        <td class="label">(or with lat/lon in degrees):</td>
+        <td class="code">=ACOS(SIN(lat1*PI()/360)*SIN(lat2*PI()/360)+COS(lat1*PI()/360)*COS(lat2*PI()/360)*COS(lon2*PI()/360-lon1*PI()/360))*6371</td>
+    </tr>
+</tbody></table>
+
+<h4 id="equirectangular">Equirectangular approximation</h4>
+
+<p>If performance is an issue and accuracy less important, for small distances 
+  <a target="_blank" href="http://en.wikipedia.org/wiki/Pythagorean_theorem">Pythagoras’
+  theorem</a> can be used on an <a target="_blank" href="http://en.wikipedia.org/wiki/Equirectangular_projection">equirectangular
+  projection</a>:<sup title="merci à Laurent Grégoire">*</sup></p>
+<table>
+  <tbody><tr>
+    <td class="label">Formula</td>
+    <td class="formula">x = Δλ⋅cos(φ<sub>m</sub>)<br>
+      y = Δφ<br>
+      d = R⋅√<span class="radicand">x² + y²</span></td>
+  </tr>
+  <tr>
+    <td class="label">JavaScript:</td>
+    <td><pre class="code prettyprint margin-l-0"><span class="kwd">var</span><span class="pln"> x </span><span class="pun">=</span><span class="pln"> </span><span class="pun">(λ</span><span class="lit">2</span><span class="pun">-λ</span><span class="lit">1</span><span class="pun">)</span><span class="pln"> </span><span class="pun">*</span><span class="pln"> </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">cos</span><span class="pun">((φ</span><span class="lit">1</span><span class="pun">+φ</span><span class="lit">2</span><span class="pun">)/</span><span class="lit">2</span><span class="pun">);</span><span class="pln">
+</span><span class="kwd">var</span><span class="pln"> y </span><span class="pun">=</span><span class="pln"> </span><span class="pun">(φ</span><span class="lit">2</span><span class="pun">-φ</span><span class="lit">1</span><span class="pun">);</span><span class="pln">
+</span><span class="kwd">var</span><span class="pln"> d </span><span class="pun">=</span><span class="pln"> </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">sqrt</span><span class="pun">(</span><span class="pln">x</span><span class="pun">*</span><span class="pln">x </span><span class="pun">+</span><span class="pln"> y</span><span class="pun">*</span><span class="pln">y</span><span class="pun">)</span><span class="pln"> </span><span class="pun">*</span><span class="pln"> R</span><span class="pun">;</span></pre></td>
+  </tr>
+</tbody></table>
+
+<p>This uses just one trig and one sqrt function – as against half-a-dozen trig functions
+  for cos law, and 7 trigs + 2 sqrts for haversine. Accuracy is somewhat complex: along meridians
+  there are no errors, otherwise they depend on distance, bearing,  and latitude, but are small enough
+  for many purposes<sup title="anyone care to quantify them?">*</sup> (and often trivial compared
+  with the spherical approximation itself).</p>
+
+<p>Alternatively, the <i>polar coordinate flat-Earth formula</i> can be used:
+    using the co-latitudes θ<sub>1</sub> = π/2−φ<sub>1</sub> and θ<sub>2</sub> = π/2−φ<sub>2</sub>,
+    then <span class="formula nowrap">d = R⋅√<span class="radicand">θ<sub>1</sub>² + θ<sub>2</sub>² − 2⋅θ<sub>1</sub>⋅θ<sub>2</sub>⋅cos(Δλ)</span></span>.
+    I’ve not compared accuracy.</p>
+
+<figure class="float-right"><img src="latlongDist_files/baghdad-to-osaka.jpg" alt="Baghdad to Osaka" height="180" width="180">
+  <figcaption>Baghdad to Osaka – <br>
+  not a constant bearing!</figcaption>
+</figure>
+
+<h3 id="bearing">Bearing</h3>
+
+<p>In general, your current heading will vary as you  follow a great circle path (orthodrome);
+  the final heading will differ from the initial heading by varying degrees according to distance
+  and latitude (if you were to go from say 35°N,45°E (Baghdad) to 35°N,135°E (Osaka), you would
+  start on a heading of 60° and end up on a heading of 120°!).</p>
+<p>This formula is for the initial bearing (sometimes referred to as forward azimuth) which if
+  followed in a straight line along a great-circle arc will take you from the start point to the
+  end point:<sup><a target="_blank" href="http://mathforum.org/library/drmath/view/55417.html">1</a></sup></p>
+<table>
+  <tbody><tr> 
+    <td class="label">Formula:</td>
+    <td class="formula">θ = atan2( sin(Δλ)⋅cos(φ<sub>2</sub>), cos(φ<sub>1</sub>)⋅sin(φ<sub>2</sub>) − sin(φ<sub>1</sub>)⋅cos(φ<sub>2</sub>)⋅cos(Δλ)
+    )</td>
+  </tr>
+  <tr>
+    <td class="label">JavaScript:</td>
+    <td><pre class="code prettyprint margin-l-0"><span class="kwd">var</span><span class="pln"> y </span><span class="pun">=</span><span class="pln"> </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">sin</span><span class="pun">(λ</span><span class="lit">2</span><span class="pun">-λ</span><span class="lit">1</span><span class="pun">)</span><span class="pln"> </span><span class="pun">*</span><span class="pln"> </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">cos</span><span class="pun">(φ</span><span class="lit">2</span><span class="pun">);</span><span class="pln">
+</span><span class="kwd">var</span><span class="pln"> x </span><span class="pun">=</span><span class="pln"> </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">cos</span><span class="pun">(φ</span><span class="lit">1</span><span class="pun">)*</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">sin</span><span class="pun">(φ</span><span class="lit">2</span><span class="pun">)</span><span class="pln"> </span><span class="pun">-</span><span class="pln">
+        </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">sin</span><span class="pun">(φ</span><span class="lit">1</span><span class="pun">)*</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">cos</span><span class="pun">(φ</span><span class="lit">2</span><span class="pun">)*</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">cos</span><span class="pun">(λ</span><span class="lit">2</span><span class="pun">-λ</span><span class="lit">1</span><span class="pun">);</span><span class="pln">
+</span><span class="kwd">var</span><span class="pln"> brng </span><span class="pun">=</span><span class="pln"> </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">atan2</span><span class="pun">(</span><span class="pln">y</span><span class="pun">,</span><span class="pln"> x</span><span class="pun">).</span><span class="pln">toDegrees</span><span class="pun">();</span></pre></td>
+  </tr>
+  <tr>
+    <td class="label">Excel:<div class="small grey">(lat/lon in radians)</div></td>
+    <td class="code nowrap">=ATAN2(COS(lat1)*SIN(lat2)-SIN(lat1)*COS(lat2)*COS(lon2-lon1), <br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;              SIN(lon2-lon1)*COS(lat2))
+    <br><span class="note">*note that Excel reverses the arguments to ATAN2 – see notes below</span></td>
+  </tr>
+</tbody></table>
+<p class="note">Since atan2 returns values in the range -π ... +π (that is, -180° ... +180°), 
+  to normalise the result to a compass bearing (in the range 0° ... 360°, with −ve values transformed
+  into the range 180° ... 360°), convert to degrees and then use (θ+360)&nbsp;%&nbsp;360,
+  where % is modulo.</p>
+<p class="note">For final bearing, simply take the <i>initial</i> bearing from the <i>end</i> point to the <i>start</i> point
+  and reverse it (using θ = (θ+180) % 360).</p>
+
+<h3 id="midpoint">Midpoint</h3>
+
+<p>This is the half-way point along a great circle path between the two points.<sup><a target="_blank" href="http://mathforum.org/library/drmath/view/51822.html">1</a></sup></p>
+<table>
+  <tbody><tr> 
+    <td class="label">Formula:</td>
+    <td class="formula">B<sub>x</sub> = cos(φ<sub>2</sub>)⋅cos(Δλ)<br>
+      B<sub>y</sub> = cos(φ<sub>2</sub>)⋅sin(Δλ)<br>
+      φ<sub>m</sub> = atan2( sin(φ<sub>1</sub>) + sin(φ<sub>2</sub>), √<span class="radicand">((cos(φ<sub>1</sub>)+B<sub>x</sub>)² 
+      + B<sub>y</sub>²)</span> )<br>
+    λ<sub>m</sub> = λ<sub>1</sub> + atan2(B<sub>y</sub>, cos(φ<sub>1</sub>)+B<sub>x</sub>)</td>
+  </tr>
+  <tr>
+    <td class="label">JavaScript:</td>
+    <td><pre class="code prettyprint margin-l-0"><span class="kwd">var</span><span class="pln"> </span><span class="typ">Bx</span><span class="pln"> </span><span class="pun">=</span><span class="pln"> </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">cos</span><span class="pun">(φ</span><span class="lit">2</span><span class="pun">)</span><span class="pln"> </span><span class="pun">*</span><span class="pln"> </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">cos</span><span class="pun">(λ</span><span class="lit">2</span><span class="pun">-λ</span><span class="lit">1</span><span class="pun">);</span><span class="pln">
+</span><span class="kwd">var</span><span class="pln"> </span><span class="typ">By</span><span class="pln"> </span><span class="pun">=</span><span class="pln"> </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">cos</span><span class="pun">(φ</span><span class="lit">2</span><span class="pun">)</span><span class="pln"> </span><span class="pun">*</span><span class="pln"> </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">sin</span><span class="pun">(λ</span><span class="lit">2</span><span class="pun">-λ</span><span class="lit">1</span><span class="pun">);</span><span class="pln">
+</span><span class="kwd">var</span><span class="pln"> </span><span class="pun">φ</span><span class="lit">3</span><span class="pln"> </span><span class="pun">=</span><span class="pln"> </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">atan2</span><span class="pun">(</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">sin</span><span class="pun">(φ</span><span class="lit">1</span><span class="pun">)</span><span class="pln"> </span><span class="pun">+</span><span class="pln"> </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">sin</span><span class="pun">(φ</span><span class="lit">2</span><span class="pun">),</span><span class="pln">
+                    </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">sqrt</span><span class="pun">(</span><span class="pln"> </span><span class="pun">(</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">cos</span><span class="pun">(φ</span><span class="lit">1</span><span class="pun">)+</span><span class="typ">Bx</span><span class="pun">)*(</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">cos</span><span class="pun">(φ</span><span class="lit">1</span><span class="pun">)+</span><span class="typ">Bx</span><span class="pun">)</span><span class="pln"> </span><span class="pun">+</span><span class="pln"> </span><span class="typ">By</span><span class="pun">*</span><span class="typ">By</span><span class="pln"> </span><span class="pun">)</span><span class="pln"> </span><span class="pun">);</span><span class="pln">
+</span><span class="kwd">var</span><span class="pln"> </span><span class="pun">λ</span><span class="lit">3</span><span class="pln"> </span><span class="pun">=</span><span class="pln"> </span><span class="pun">λ</span><span class="lit">1</span><span class="pln"> </span><span class="pun">+</span><span class="pln"> </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">atan2</span><span class="pun">(</span><span class="typ">By</span><span class="pun">,</span><span class="pln"> </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">cos</span><span class="pun">(φ</span><span class="lit">1</span><span class="pun">)</span><span class="pln"> </span><span class="pun">+</span><span class="pln"> </span><span class="typ">Bx</span><span class="pun">);</span></pre></td>
+  </tr>
+</tbody></table>
+
+<p class="note">Just as the initial bearing may vary from the final bearing, the midpoint may 
+  not be located half-way between latitudes/longitudes; the midpoint between 35°N,45°E 
+and 35°N,135°E is around 45°N,90°E.</p>
+<p>&nbsp;</p>
+
+<hr>
+
+<h3 id="destPoint"><b>Destination point given distance and bearing from start point</b></h3>
+
+<p>Given a start point, initial bearing, and distance, this will 
+  calculate the destination point and final bearing travelling along a (shortest distance) great
+  circle arc.</p>
+
+<form name="ortho-dest" id="ortho-dest">
+<fieldset><legend>Destination point along great-circle given distance and bearing from start point</legend>
+  <table class="inputs">
+    <tbody><tr>
+      <td>Start point:</td>
+      <td>
+        <input name="lat1" class="lat1" value="53°19′14″N" type="text">,
+        <input name="lon1" class="lon1" value="001°43′47″W" type="text"></td>
+    </tr>
+    <tr>
+      <td>Bearing:</td>
+      <td><input name="brng" class="brng" value="096°01′18″" type="text"></td>
+    </tr>
+    <tr>
+      <td>Distance:</td>
+      <td><input name="dist" class="dist" step="any" value="124.8" type="number"> km</td>
+    </tr>
+  </tbody></table>
+  <table class="outputs">
+    <tbody><tr>
+      <td>Destination point:</td>
+      <td><output class="result-point" title="Destination point">53°11′18″N, 000°08′00″E</output></td>
+    </tr>
+    <tr>
+      <td>Final bearing:</td>
+      <td><output class="result-brng" title="Final bearing (azimuth) arriving at point 2">097°30′52″</output></td>
+    </tr>
+    <tr>
+      <td>
+        <p class="toggle-map"><a>view map</a></p>
+        <p class="toggle-map hidden"><a>hide map</a></p>
+      </td>
+      <td></td>
+    </tr>
+  </tbody></table>
+  <div id="map-ortho-dest-canvas" class="map"></div>
+</fieldset>
+</form>
+
+<table>
+    <tbody><tr>
+        <td class="label">Formula: </td>
+        <td class="formula">φ<sub>2</sub> = asin( sin(φ<sub>1</sub>)⋅cos(δ) + cos(φ<sub>1</sub>)⋅sin(δ)⋅cos(θ) )</td>
+    </tr>
+    <tr>
+        <td></td>
+        <td class="formula">λ<sub>2</sub> = λ<sub>1</sub> + atan2( sin(θ)⋅sin(δ)⋅cos(φ<sub>1</sub>), cos(δ)−sin(φ<sub>1</sub>)⋅sin(φ<sub>2</sub>) )</td>
+    </tr>
+    <tr>
+        <td class="label align-right">where</td>
+        <td><i></i>φ<i> is latitude, </i>λ<i> is longitude, </i>θ<i> is the bearing (in radians, clockwise from north),
+            δ is the angular distance (in radians) </i>d/R<i>; </i>d<i> being the distance travelled, </i>R<i> the earth’s radius</i></td>
+    </tr>
+    <tr>
+        <td class="label">JavaScript:</td>
+        <td><pre class="code prettyprint margin-l-0"><span class="kwd">var</span><span class="pln"> </span><span class="pun">φ</span><span class="lit">2</span><span class="pln"> </span><span class="pun">=</span><span class="pln"> </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">asin</span><span class="pun">(</span><span class="pln"> </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">sin</span><span class="pun">(φ</span><span class="lit">1</span><span class="pun">)*</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">cos</span><span class="pun">(</span><span class="pln">d</span><span class="pun">/</span><span class="pln">R</span><span class="pun">)</span><span class="pln"> </span><span class="pun">+</span><span class="pln">
+                    </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">cos</span><span class="pun">(φ</span><span class="lit">1</span><span class="pun">)*</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">sin</span><span class="pun">(</span><span class="pln">d</span><span class="pun">/</span><span class="pln">R</span><span class="pun">)*</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">cos</span><span class="pun">(</span><span class="pln">brng</span><span class="pun">)</span><span class="pln"> </span><span class="pun">);</span><span class="pln">
+</span><span class="kwd">var</span><span class="pln"> </span><span class="pun">λ</span><span class="lit">2</span><span class="pln"> </span><span class="pun">=</span><span class="pln"> </span><span class="pun">λ</span><span class="lit">1</span><span class="pln"> </span><span class="pun">+</span><span class="pln"> </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">atan2</span><span class="pun">(</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">sin</span><span class="pun">(</span><span class="pln">brng</span><span class="pun">)*</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">sin</span><span class="pun">(</span><span class="pln">d</span><span class="pun">/</span><span class="pln">R</span><span class="pun">)*</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">cos</span><span class="pun">(φ</span><span class="lit">1</span><span class="pun">),</span><span class="pln">
+                     </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">cos</span><span class="pun">(</span><span class="pln">d</span><span class="pun">/</span><span class="pln">R</span><span class="pun">)-</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">sin</span><span class="pun">(φ</span><span class="lit">1</span><span class="pun">)*</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">sin</span><span class="pun">(φ</span><span class="lit">2</span><span class="pun">));</span></pre></td>
+    </tr>
+    <tr>
+        <td class="label">Excel:<div class="small grey">(lat/lon in radians)</div></td>
+        <td class="code">lat2: =ASIN(SIN(lat1)*COS(d/R) + COS(lat1)*SIN(d/R)*COS(brng))<br>
+            lon2: =lon1 + ATAN2(COS(d/R)-SIN(lat1)*SIN(lat2), SIN(brng)*SIN(d/R)*COS(lat1))
+            <br><span class="note">* Remember that Excel reverses the arguments to ATAN2 – see notes below</span></td>
+    </tr>
+</tbody></table>
+
+<p class="note">For final bearing, simply take the <i>initial</i> bearing from the <i>end</i> point to the <i>start</i>
+    point and reverse it (using θ = (θ+180) % 360).</p>
+<p>&nbsp;</p>
+<hr>
+
+<h3 id="intersection">Intersection of two paths given start points and bearings</h3>
+
+<p>This is a rather more complex calculation than most others on this page, but I've been asked
+  for it a number of times. See below for the JavaScript.</p>
+
+<form name="intersect" id="intersect">
+    <fieldset><legend>Intersection of two great-circle paths</legend>
+        <table class="inputs">
+            <tbody><tr>
+                <td>Point 1:</td>
+                <td>
+                <input name="lat1" class="lat1" value="51.885 N" title="Latitude 1" type="text">,
+                <input name="lon1" class="lon1" value="0.235 E" title="Longitude 1" type="text">
+                Brng 1:
+                <input name="brng1" class="brng1" value="108.63°" title="Bearing 1" type="text">
+                </td>
+            </tr>
+            <tr>
+                <td>Point 2:</td>
+                <td>
+                <input name="lat2" class="lat2" value="49.008 N" title="Latitude 2" type="text">,
+                <input name="lon2" class="lon2" value="2.549 E" title="Longitude 2" type="text">
+                Brng 2:
+                <input name="brng1" class="brng2" value="32.72°" title="Bearing 2" type="text">
+                </td>
+            </tr>
+        </tbody></table>
+        <table class="outputs">
+            <tbody><tr>
+                <td>Intersection point:</td>
+                <td><output class="result-point" title="Intersection point">50°54′06″N, 004°29′39″E</output></td>
+            </tr>
+            <tr>
+                <td colspan="2"><p>&nbsp;</p></td>
+            </tr>
+        </tbody></table>
+    </fieldset>
+</form>
+
+<table class="clear-floats">
+  <tbody><tr>
+    <td class="label">Formula: </td>
+    <td class="formula">
+      <p>δ<sub>12</sub> = 2⋅asin( √<span class="radicand">(sin²(Δφ/2)
+          + cos(φ<sub>1</sub>)⋅cos(φ<sub>2</sub>)⋅sin²(Δλ/2))</span> )<br>
+      φ<sub>1</sub> = acos( sin(φ<sub>2</sub>) − sin(φ<sub>1</sub>)⋅cos(δ<sub>12</sub>)
+      / sin(δ<sub>12</sub>)⋅cos(φ<sub>1</sub>) )<br>
+      φ<sub>2</sub> = acos( sin(φ<sub>1</sub>) − sin(φ<sub>2</sub>)⋅cos(δ<sub>12</sub>)
+      / sin(δ<sub>12</sub>)⋅cos(φ<sub>2</sub>) )</p>
+<p> if sin(λ<sub>2</sub>−λ<sub>1</sub>) &gt; 0<br>
+          &nbsp;&nbsp;&nbsp;&nbsp;θ<sub>12</sub> = φ<sub>1</sub>, θ<sub>21</sub> =
+          2⋅π − φ<sub>2</sub><br>
+          else<br>
+          &nbsp;&nbsp;&nbsp;&nbsp;θ<sub>12</sub> = 2⋅π − φ<sub>1</sub>, θ<sub>21</sub> =
+          φ<sub>2</sub></p>
+      <p> α<sub>1</sub> = (θ<sub>1</sub> − θ<sub>12</sub> + π) % 2⋅π − π<br>
+        α<sub>2</sub> = (θ<sub>21</sub> − θ<sub>2</sub> + π) % 2⋅π − π</p>
+      <p class="hidden">α<sub>1</sub> = |α<sub>1</sub>|<br>
+        α<sub>2</sub> = |α<sub>2</sub>|</p>
+      <p>α<sub>3</sub> = acos( −cos(α<sub>1</sub>)⋅cos(α<sub>2</sub>) + sin(α<sub>1</sub>)⋅sin(α<sub>2</sub>)⋅cos(δ<sub>12</sub>)
+        )<br>
+        δ<sub>13</sub> = atan2( sin(δ<sub>12</sub>)⋅sin(α<sub>1</sub>)⋅sin(α<sub>2</sub>), cos(α<sub>2</sub>)+cos(α<sub>1</sub>)⋅cos(α<sub>3</sub>)
+        )<br>
+        φ<sub>3</sub> = asin( sin(φ<sub>1</sub>)⋅cos(δ<sub>13</sub>) + cos(φ<sub>1</sub>)⋅sin(δ<sub>13</sub>)⋅cos(θ<sub>1</sub>)
+        )<br>
+        Δλ<sub>13</sub> = atan2( sin(θ<sub>1</sub>)⋅sin(δ<sub>13</sub>)⋅cos(φ<sub>1</sub>),
+        cos(δ<sub>13</sub>)−sin(φ<sub>1</sub>)⋅sin(φ<sub>3</sub>) ) <br>
+      λ<sub>3</sub> = (λ<sub>1</sub>+Δλ<sub>13</sub>+π) % 2⋅π − π</p>
+    </td>
+  </tr>
+  <tr>
+    <td class="label align-right"><i>where</i></td>
+    <td><p><i>φ<sub>1</sub>, λ<sub>1</sub>, θ<sub>1</sub> : 1st point &amp; bearing<br>
+      φ<sub>2</sub>, λ<sub>2</sub>, θ<sub>2</sub> : 2nd point &amp; bearing<br>
+      φ<sub>3</sub>, λ<sub>3</sub> : intersection point</i></p>
+        <p><i>% = mod<span class="hidden">, | | = abs</span></i></p></td>
+  </tr>
+  <tr>
+    <td class="label align-right">note –</td>
+    <td>if sin(α<sub>1</sub>)=0 and sin(α<sub>2</sub>)=0: infinite solutions<br>
+      if sin(α<sub>1</sub>)⋅sin(α<sub>2</sub>) &lt; 0: ambiguous solution<br>
+    this formulation is not always well-conditioned for meridional or equatorial lines</td>
+  </tr>
+</tbody></table>
+<p>This is a lot simpler using vectors rather than spherical trigonometry:
+    see <a href="http://www.movable-type.co.uk/scripts/latlong-vectors.html#intersection">latlong-vectors.html</a> (currently work in progress).</p>
+<hr>
+
+<h3 id="crossTrack">Cross-track distance</h3>
+
+<p>Here’s a new one:  I’ve sometimes been asked about distance of a point from a great-circle path 
+  (sometimes called cross track error). 
+</p><table>
+  <tbody><tr>
+    <td class="label">Formula: </td>
+    <td class="formula">d<sub>xt</sub> = asin(sin(d<sub>13</sub>/R)⋅sin(θ<sub>13</sub>−θ<sub>12</sub>)) ⋅ R</td>
+  </tr>
+  <tr>
+    <td class="label align-right"><i>where</i></td>
+    <td><i> d<sub>13</sub> is distance from start point to third point<br>
+      θ<sub>13</sub> is (initial) bearing from start point to third point<br>
+      θ<sub>12</sub> is (initial) bearing from start point to end point<br>
+      R<i> is the earth’s radius</i><br>
+    </i></td>
+  </tr>
+  <tr>
+    <td class="label">JavaScript:</td>
+    <td><pre class="code prettyprint margin-l-0"><span class="kwd">var</span><span class="pln"> dXt </span><span class="pun">=</span><span class="pln"> </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">asin</span><span class="pun">(</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">sin</span><span class="pun">(</span><span class="pln">d13</span><span class="pun">/</span><span class="pln">R</span><span class="pun">)*</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">sin</span><span class="pun">(θ</span><span class="lit">13</span><span class="pun">-θ</span><span class="lit">12</span><span class="pun">))</span><span class="pln"> </span><span class="pun">*</span><span class="pln"> R</span><span class="pun">;</span></pre></td>
+  </tr>
+</tbody></table>
+<p>Here, the great-circle path is identified by a start point and an end
+ point – depending on what initial data you’re working from, you can use
+ the formulæ above to obtain the relevant distance and bearings. The 
+sign of d<sub>xt</sub> tells you which side of the path the third point is on.</p>
+<p>The along-track distance, from the start point to the closest point on the path to the third point, is</p>
+<table>
+  <tbody><tr>
+    <td class="label">Formula: </td>
+    <td class="formula">d<sub>at</sub> = acos(cos(d<sub>13</sub>/R)/cos(d<sub>xt</sub>/R)) ⋅ R</td>
+  </tr>
+  <tr>
+    <td class="label align-right"><i>where</i></td>
+    <td><i> d<sub>13</sub> is distance from start point to third point<br>
+      d<sub>xt</sub> is cross-track distance<br>
+      R<i> is the earth’s radius</i><br>
+    </i></td>
+  </tr>
+  <tr>
+    <td class="label">JavaScript:</td>
+    <td><pre class="code prettyprint margin-l-0"><span class="kwd">var</span><span class="pln"> dAt </span><span class="pun">=</span><span class="pln"> </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">acos</span><span class="pun">(</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">cos</span><span class="pun">(</span><span class="pln">d13</span><span class="pun">/</span><span class="pln">R</span><span class="pun">)/</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">cos</span><span class="pun">(</span><span class="pln">dXt</span><span class="pun">/</span><span class="pln">R</span><span class="pun">))</span><span class="pln"> </span><span class="pun">*</span><span class="pln"> R</span><span class="pun">;</span></pre></td>
+  </tr>
+</tbody></table>
+
+<h3 id="clairaut">Closest point to the poles</h3>
+
+<p>And: ‘Clairaut’s formula’ will give you the maximum latitude of a great circle path,
+  given a bearing θ and latitude φ on the great circle:
+</p><table>
+  <tbody><tr>
+    <td class="label">Formula: </td>
+    <td class="formula">φ<sub>max</sub> = acos(abs(sin(θ)⋅cos(φ)))</td>
+  </tr>
+  <tr>
+    <td class="label">JavaScript:</td>
+    <td><pre class="code prettyprint margin-l-0"><span class="kwd">var</span><span class="pln"> </span><span class="pun">φ</span><span class="typ">Max</span><span class="pln"> </span><span class="pun">=</span><span class="pln"> </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">acos</span><span class="pun">(</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">abs</span><span class="pun">(</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">sin</span><span class="pun">(θ)*</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">cos</span><span class="pun">(φ)));</span></pre></td>
+  </tr>
+</tbody></table>
+<p>&nbsp;</p>
+
+<hr>
+
+<h3 id="rhumblines">Rhumb lines</h3>
+<p>A ‘rhumb line’ (or loxodrome) is a path of constant bearing, which crosses all meridians at 
+  the same angle.</p>
+<p>Sailors used to (and sometimes still) navigate along rhumb lines since it is easier to follow
+  a constant compass  bearing than to be continually adjusting the bearing, as is needed to follow
+  a great circle. Rhumb lines are straight lines on a Mercator Projection map (also helpful for
+  navigation).</p>
+<p>Rhumb lines are
+  generally longer than great-circle (orthodrome) routes. For instance, London to New
+  York is  4% longer along a rhumb line than along a great
+  circle – important for aviation fuel, but not particularly to sailing vessels. New York to
+  Beijing – close to the most extreme example possible (though not sailable!) – is 30% longer
+  along a rhumb line.</p>
+
+<form name="rhumb-dist" id="rhumb-dist">
+<fieldset><legend>Rhumb-line distance between two points</legend>
+  <table class="inputs">
+    <tbody><tr>
+      <td>Point 1:</td>
+      <td>
+        <input name="lat1" class="lat1" value="50 21 50N" title="Latitude 1" type="text">,
+        <input name="lon1" class="lon1" value="004 09 25W" title="Longitude 1" type="text">
+      </td>
+    </tr>
+    <tr>
+      <td>Point 2:</td>
+      <td>
+        <input name="lat2" class="lat2" value="42 21 04N" title="Latitude 2" type="text">,
+        <input name="lon2" class="lon2" value="071 02 27W" title="Longitude 2" type="text">
+      </td>
+    </tr>
+  </tbody></table>
+  <table class="outputs">
+    <tbody><tr>
+      <td>Distance:</td>
+      <td><output class="result-dist" title="Distance (in km)">5196</output> km</td>
+    </tr>
+    <tr>
+      <td>Bearing:</td>
+      <td><output class="result-brng" title="Bearing (azimuth) between points">260°07′38″</output></td>
+    </tr>
+    <tr>
+      <td>Midpoint:</td>
+      <td><output class="result-midpt" title="Midpoint between points">46°21′27″N, 038°49′39″W</output></td>
+    </tr>
+    <tr>
+      <td>
+      <p class="toggle-map"><a>view map</a></p>
+      <p class="toggle-map hidden"><a>hide map</a></p>
+      </td>
+      <td></td>
+    </tr>
+  </tbody></table>
+  <div id="map-rhumb-dist-canvas" class="map"></div>
+</fieldset>
+</form>
+<form name="rhumb-dest" id="rhumb-dest" class="demo">
+<fieldset><legend>Destination point along rhumb line given distance and bearing from start point</legend>
+  <div class="inputs">
+    <table>
+      <tbody><tr>
+        <td>Start point:</td>
+        <td>
+          <input name="lat1" class="lat1" value="51 07 32N" type="text">,
+          <input name="lon1" class="lon1" value="001 20 17E" type="text"></td>
+      </tr>
+      <tr>
+        <td>Bearing:</td>
+        <td><input name="brng" class="brng" value="116°38′10" type="text"></td>
+      </tr>
+      <tr>
+        <td>Distance:</td>
+        <td><input name="dist" class="dist" step="any" value="40.23" type="number">
+          km</td>
+      </tr>
+    </tbody></table>
+  </div>
+  <table class="outputs">
+    <tbody><tr>
+      <td>Destination point:</td>
+      <td><output class="result-point" title="Destination points">50°57′48″N, 001°51′09″E</output></td>
+    </tr>
+    <tr>
+      <td>
+        <p class="toggle-map"><a>view map</a></p>
+        <p class="toggle-map hidden"><a>hide map</a></p>
+      </td>
+      <td></td>
+    </tr>
+  </tbody></table>
+  <div id="map-rhumb-dest-canvas" class="map"></div>
+  <p>&nbsp;</p>
+</fieldset>
+</form>
+
+<p>Key to calculations of rhumb lines is the
+    <i>inverse Gudermannian function</i><a target="_blank" href="http://mathworld.wolfram.com/InverseGudermannian.html">¹</a>,
+    which gives the height on a Mercator projection map of a given latitude:
+    <span class="formula">ln(tanφ + secφ)</span> or <span class="formula">ln( tan(π/4+φ/2) )</span>.
+    <span class="grey">For obsessives, there is even an ellipsoidal version, the ‘isometric latitude’:
+    <span class="formula">ln( tan(π/4+φ/2) / [(1−e⋅sinφ)/(1+e⋅sinφ)]<sup>e/2</sup>)</span>.</span>
+    This of course tends to infinity at the poles (in keeping with the Mercator projection).</p>
+<p>The formulæ to derive Mercator projection easting and northing coordinates from spherical latitude and longitude
+    are then<a target="_blank" href="http://www.epsg.org/guides/docs/g7-2.pdf">¹</a></p>
+<table class="width-full">
+    <tbody><tr>
+        <td></td>
+        <td class="formula">E = R⋅λ</td>
+    </tr>
+    <tr>
+        <td></td>
+        <td class="formula">N = R⋅ln( tan(π/4+φ/2) )</td>
+    </tr>
+</tbody></table>
+<p>The following formulæ are from Ed Williams’ aviation formulary.<a target="_blank" href="http://williams.best.vwh.net/avform.htm#Rhumb">¹</a></p>
+
+
+<h4>Distance</h4>
+
+<p>Since a rhumb line is a straight line on a Mercator projection,
+    the distance between two points along a rhumb line is the length of that line (by Pythagoras);
+    but the distortion of the projection needs to be compensated for.</p>
+<p>On a constant latitude course (travelling east-west), this compensation is simply <span class="formula">cosφ</span>;
+    in the general case, it is <span class="formula">Δφ/Δψ</span> where
+    <span class="formula">Δψ = ln( tan(π/4+φ2/2)/tan(π/4+φ1/2) )</span>
+    (the ‘projected’ latitude difference)</p>
+<table class="width-full">
+    <tbody><tr>
+        <td class="label">Formula: </td>
+        <td class="formula">Δψ = ln( tan(π/4+φ<sub>2</sub>/2) / tan(π/4+φ<sub>1</sub>/2) )</td>
+        <td class="small grey align-right">(‘projected’ latitude difference)</td>
+    </tr>
+    <tr>
+        <td></td>
+        <td class="formula">q = Δφ/Δψ (or cosφ for E-W line)</td>
+        <td></td>
+    </tr>
+    <tr>
+        <td></td>
+        <td class="formula">d = √<span class="radicand">(Δφ² + q²⋅Δλ²)</span>⋅R </td>
+        <td class="small grey align-right">(Pythagoras)</td>
+    </tr>
+    <tr>
+        <td class="label align-right">where</td>
+        <td colspan="2">φ <i>is latitud</i>e, λ <i>is longitude</i>,
+            Δλ<i> is taking shortest route (&lt;180º),
+            </i>R<i> is the earth’s radius</i>, ln<i> is natural log</i></td>
+    </tr>
+    <tr>
+        <td class="label">JavaScript:</td>
+        <td colspan="2"><pre class="code prettyprint margin-l-0"><span class="kwd">var</span><span class="pln"> </span><span class="pun">Δψ</span><span class="pln"> </span><span class="pun">=</span><span class="pln"> </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">log</span><span class="pun">(</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">tan</span><span class="pun">(</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">PI</span><span class="pun">/</span><span class="lit">4</span><span class="pun">+φ</span><span class="lit">2</span><span class="pun">/</span><span class="lit">2</span><span class="pun">)/</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">tan</span><span class="pun">(</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">PI</span><span class="pun">/</span><span class="lit">4</span><span class="pun">+φ</span><span class="lit">1</span><span class="pun">/</span><span class="lit">2</span><span class="pun">));</span><span class="pln">
+</span><span class="kwd">var</span><span class="pln"> q </span><span class="pun">=</span><span class="pln"> </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">abs</span><span class="pun">(Δψ)</span><span class="pln"> </span><span class="pun">&gt;</span><span class="pln"> </span><span class="lit">10e-12</span><span class="pln"> </span><span class="pun">?</span><span class="pln"> </span><span class="pun">Δφ/Δψ</span><span class="pln"> </span><span class="pun">:</span><span class="pln"> </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">cos</span><span class="pun">(φ</span><span class="lit">1</span><span class="pun">);</span><span class="pln"> </span><span class="com">// E-W course becomes ill-conditioned with 0/0</span><span class="pln">
+
+</span><span class="com">// if dLon over 180° take shorter rhumb across anti-meridian:</span><span class="pln">
+</span><span class="kwd">if</span><span class="pln"> </span><span class="pun">(</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">abs</span><span class="pun">(Δλ)</span><span class="pln"> </span><span class="pun">&gt;</span><span class="pln"> </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">PI</span><span class="pun">)</span><span class="pln"> </span><span class="pun">Δλ</span><span class="pln"> </span><span class="pun">=</span><span class="pln"> </span><span class="pun">Δλ&gt;</span><span class="lit">0</span><span class="pln"> </span><span class="pun">?</span><span class="pln"> </span><span class="pun">-(</span><span class="lit">2</span><span class="pun">*</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">PI</span><span class="pun">-Δλ)</span><span class="pln"> </span><span class="pun">:</span><span class="pln"> </span><span class="pun">(</span><span class="lit">2</span><span class="pun">*</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">PI</span><span class="pun">+Δλ);</span><span class="pln">
+
+</span><span class="kwd">var</span><span class="pln"> dist </span><span class="pun">=</span><span class="pln"> </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">sqrt</span><span class="pun">(Δφ*Δφ</span><span class="pln"> </span><span class="pun">+</span><span class="pln"> q</span><span class="pun">*</span><span class="pln">q</span><span class="pun">*Δλ*Δλ)</span><span class="pln"> </span><span class="pun">*</span><span class="pln"> R</span><span class="pun">;</span></pre></td>
+    </tr>
+</tbody></table>
+
+<h4>Bearing</h4>
+
+<p>A rhumb line is a straight line on a Mercator projection, with an angle on the projection equal to the compass bearing.</p>
+
+<table class="width-full">
+    <tbody><tr>
+        <td class="label">Formula: </td>
+        <td class="formula">Δψ = ln( tan(π/4+φ<sub>2</sub>/2) / tan(π/4+φ<sub>1</sub>/2) )</td>
+        <td class="small grey align-right">(‘projected’ latitude difference)</td>
+    </tr>
+    <tr>
+        <td></td>
+        <td class="formula">θ = atan2(Δλ, Δψ)</td>
+        <td></td>
+    </tr>
+    <tr>
+        <td class="label align-right">where</td>
+        <td colspan="2">φ <i>is latitud</i>e, λ <i>is longitude</i>,
+            Δλ<i> is taking shortest route (&lt;180º),
+            </i>R<i> is the earth’s radius</i>, ln<i> is natural log</i></td>
+    </tr>
+    <tr>
+        <td class="label">JavaScript:</td>
+        <td colspan="2"><pre class="code prettyprint margin-l-0"><span class="kwd">var</span><span class="pln"> </span><span class="pun">Δψ</span><span class="pln"> </span><span class="pun">=</span><span class="pln"> </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">log</span><span class="pun">(</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">tan</span><span class="pun">(</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">PI</span><span class="pun">/</span><span class="lit">4</span><span class="pun">+φ</span><span class="lit">2</span><span class="pun">/</span><span class="lit">2</span><span class="pun">)/</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">tan</span><span class="pun">(</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">PI</span><span class="pun">/</span><span class="lit">4</span><span class="pun">+φ</span><span class="lit">1</span><span class="pun">/</span><span class="lit">2</span><span class="pun">));</span><span class="pln">
+</span><span class="kwd">var</span><span class="pln"> q </span><span class="pun">=</span><span class="pln"> </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">abs</span><span class="pun">(Δψ)</span><span class="pln"> </span><span class="pun">&gt;</span><span class="pln"> </span><span class="lit">10e-12</span><span class="pln"> </span><span class="pun">?</span><span class="pln"> </span><span class="pun">Δφ/Δψ</span><span class="pln"> </span><span class="pun">:</span><span class="pln"> </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">cos</span><span class="pun">(φ</span><span class="lit">1</span><span class="pun">);</span><span class="pln"> </span><span class="com">// E-W course becomes ill-conditioned with 0/0</span><span class="pln">
+
+</span><span class="com">// if dLon over 180° take shorter rhumb across anti-meridian:</span><span class="pln">
+</span><span class="kwd">if</span><span class="pln"> </span><span class="pun">(</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">abs</span><span class="pun">(Δλ)</span><span class="pln"> </span><span class="pun">&gt;</span><span class="pln"> </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">PI</span><span class="pun">)</span><span class="pln"> </span><span class="pun">Δλ</span><span class="pln"> </span><span class="pun">=</span><span class="pln"> </span><span class="pun">Δλ&gt;</span><span class="lit">0</span><span class="pln"> </span><span class="pun">?</span><span class="pln"> </span><span class="pun">-(</span><span class="lit">2</span><span class="pun">*</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">PI</span><span class="pun">-Δλ)</span><span class="pln"> </span><span class="pun">:</span><span class="pln"> </span><span class="pun">(</span><span class="lit">2</span><span class="pun">*</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">PI</span><span class="pun">+Δλ);</span><span class="pln">
+
+</span><span class="kwd">var</span><span class="pln"> brng </span><span class="pun">=</span><span class="pln"> </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">atan2</span><span class="pun">(Δλ,</span><span class="pln"> </span><span class="pun">Δψ).</span><span class="pln">toDegrees</span><span class="pun">();</span></pre></td>
+    </tr>
+</tbody></table>
+
+<h4>Destination</h4>
+
+<p>Given a start point and a distance <i>d</i> along constant bearing <i>θ</i>, this
+  will calculate the destination point. If you maintain a constant bearing along a rhumb
+  line, you will gradually spiral in towards one of the poles. </p>
+<table class="width-full">
+    <tbody><tr>
+        <td class="label">Formula: </td>
+        <td class="formula">δ = d/R</td>
+        <td class="small grey align-right">(angular distance)</td>
+    </tr>
+    <tr>
+        <td></td>
+        <td class="formula">Δψ = ln( tan(π/4+φ<sub>2</sub>/2) / tan(π/4+φ<sub>1</sub>/2) )</td>
+        <td class="small grey align-right">(‘projected’ latitude difference)</td>
+    </tr>
+    <tr>
+        <td></td>
+        <td class="formula">q = Δφ/Δψ (or cosφ for E-W line)</td>
+        <td class="formula">&nbsp;</td>
+    </tr>
+    <tr>
+        <td></td>
+        <td class="formula">Δλ = δ⋅sin(θ) / q</td>
+        <td class="formula">&nbsp;</td>
+    </tr>
+    <tr>
+        <td></td>
+        <td class="formula">φ<sub>2</sub> = φ<sub>1</sub> + δ⋅cosθ</td>
+        <td class="formula">&nbsp;</td>
+    </tr>
+    <tr>
+        <td></td>
+        <td class="formula">λ<sub>2</sub> = λ<sub>1</sub> +Δλ</td>
+        <td class="formula">&nbsp;</td>
+    </tr>
+    <tr>
+        <td class="label align-right">where</td>
+        <td colspan="2">φ <i>is latitud</i>e, λ <i>is longitude</i><i>, </i>Δλ<i> is
+            taking shortest route (&lt;180°), ln<i> is natural log and </i>%<i> is modulo</i>,
+            </i>R<i> is the earth’s radius</i></td>
+    </tr>
+    <tr>
+        <td class="label">JavaScript:</td>
+        <td colspan="2"><pre class="code prettyprint margin-l-0"><span class="kwd">var</span><span class="pln"> </span><span class="pun">Δφ</span><span class="pln"> </span><span class="pun">=</span><span class="pln"> </span><span class="pun">δ*</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">cos</span><span class="pun">(θ);</span><span class="pln">
+</span><span class="kwd">var</span><span class="pln"> </span><span class="pun">φ</span><span class="lit">2</span><span class="pln"> </span><span class="pun">=</span><span class="pln"> </span><span class="pun">φ</span><span class="lit">1</span><span class="pln"> </span><span class="pun">+</span><span class="pln"> </span><span class="pun">Δλ;</span><span class="pln">
+</span><span class="kwd">var</span><span class="pln"> </span><span class="pun">Δψ</span><span class="pln"> </span><span class="pun">=</span><span class="pln"> </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">log</span><span class="pun">(</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">tan</span><span class="pun">(φ</span><span class="lit">2</span><span class="pun">/</span><span class="lit">2</span><span class="pun">+</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">PI</span><span class="pun">/</span><span class="lit">4</span><span class="pun">)/</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">tan</span><span class="pun">(φ</span><span class="lit">1</span><span class="pun">/</span><span class="lit">2</span><span class="pun">+</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">PI</span><span class="pun">/</span><span class="lit">4</span><span class="pun">));</span><span class="pln">
+</span><span class="kwd">var</span><span class="pln"> q </span><span class="pun">=</span><span class="pln"> </span><span class="pun">Δψ</span><span class="pln"> </span><span class="pun">&gt;</span><span class="pln"> </span><span class="lit">10e-12</span><span class="pln"> </span><span class="pun">?</span><span class="pln"> </span><span class="pun">Δφ</span><span class="pln"> </span><span class="pun">/</span><span class="pln"> </span><span class="pun">Δψ</span><span class="pln"> </span><span class="pun">:</span><span class="pln"> </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">cos</span><span class="pun">(φ</span><span class="lit">1</span><span class="pun">);</span><span class="pln"> </span><span class="com">// E-W course becomes ill-conditioned with 0/0</span><span class="pln">
+</span><span class="kwd">var</span><span class="pln"> </span><span class="pun">Δλ</span><span class="pln"> </span><span class="pun">=</span><span class="pln"> </span><span class="pun">δ*</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">sin</span><span class="pun">(θ)/</span><span class="pln">q</span><span class="pun">;</span><span class="pln">
+
+</span><span class="com">// check for some daft bugger going past the pole, normalise latitude if so</span><span class="pln">
+</span><span class="kwd">if</span><span class="pln"> </span><span class="pun">(</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">abs</span><span class="pun">(φ</span><span class="lit">2</span><span class="pun">)</span><span class="pln"> </span><span class="pun">&gt;</span><span class="pln"> </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">PI</span><span class="pun">/</span><span class="lit">2</span><span class="pun">)</span><span class="pln"> </span><span class="pun">φ</span><span class="lit">2</span><span class="pln"> </span><span class="pun">=</span><span class="pln"> </span><span class="pun">φ</span><span class="lit">2</span><span class="pun">&gt;</span><span class="lit">0</span><span class="pln"> </span><span class="pun">?</span><span class="pln"> </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">PI</span><span class="pun">-φ</span><span class="lit">2</span><span class="pln"> </span><span class="pun">:</span><span class="pln"> </span><span class="pun">-</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">PI</span><span class="pun">-φ</span><span class="lit">2</span><span class="pun">;</span><span class="pln">
+
+</span><span class="pun">λ</span><span class="lit">2</span><span class="pln"> </span><span class="pun">=</span><span class="pln"> </span><span class="pun">(λ</span><span class="lit">1</span><span class="pun">+</span><span class="pln">dLon</span><span class="pun">+</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">PI</span><span class="pun">)%(</span><span class="lit">2</span><span class="pun">*</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">PI</span><span class="pun">)</span><span class="pln"> </span><span class="pun">-</span><span class="pln"> </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">PI</span><span class="pun">;</span></pre></td>
+  </tr>
+</tbody></table>
+
+<h4>Mid-point</h4>
+
+<p>This formula for calculating the ‘loxodromic midpoint’, the point half-way along a
+  rhumb line between two points, is due to Robert Hill and 
+  Clive Tooth<sup><a target="_blank" href="http://mathforum.org/kb/message.jspa?messageID=148837">1</a></sup> (thx
+  Axel!).</p>
+
+<table>
+  <tbody><tr> 
+    <td class="label">Formula: </td>
+    <td class="formula">φ<sub>m</sub> = (φ<sub>1</sub>+φ<sub>2</sub>)/2</td>
+    <td class="formula">&nbsp;</td>
+  </tr>
+  <tr> 
+    <td></td>
+    <td class="formula">f<sub>1</sub> = tan(π/4+φ<sub>1</sub>/2)</td>
+    <td class="formula">&nbsp;</td>
+  </tr>
+  <tr> 
+    <td></td>
+    <td class="formula">f<sub>2</sub> = tan(π/4+φ<sub>2</sub>/2)</td>
+    <td class="small align-right">&nbsp;</td>
+  </tr>
+  <tr> 
+    <td></td>
+    <td class="formula">f<sub>m</sub> = tan(π/4+φ<sub>m</sub>/2)</td>
+    <td class="formula">&nbsp;</td>
+  </tr>
+  <tr> 
+    <td></td>
+    <td class="formula">λ<sub>m</sub> = [ (λ<sub>2</sub>−λ<sub>1</sub>)⋅ln(f<sub>m</sub>) + λ<sub>1</sub>⋅ln(f<sub>2</sub>) − λ<sub>2</sub>⋅ln(f<sub>1</sub>) ] / ln(f<sub>2</sub>/f<sub>1</sub>)</td>
+    <td class="formula">&nbsp;</td>
+  </tr>
+  <tr> 
+    <td class="label align-right">where</td>
+    <td colspan="2">φ <i>is latitude</i>, λ <i>is longitude</i>, ln <i>is natural log</i></td>
+  </tr>
+  <tr>
+    <td class="label">JavaScript:</td>
+    <td colspan="2"><pre class="code prettyprint margin-l-0"><span class="kwd">if</span><span class="pln"> </span><span class="pun">(</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">abs</span><span class="pun">(λ</span><span class="lit">2</span><span class="pun">-λ</span><span class="lit">1</span><span class="pun">)</span><span class="pln"> </span><span class="pun">&gt;</span><span class="pln"> </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">PI</span><span class="pun">)</span><span class="pln"> </span><span class="pun">λ</span><span class="lit">1</span><span class="pln"> </span><span class="pun">+=</span><span class="pln"> </span><span class="lit">2</span><span class="pun">*</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">PI</span><span class="pun">;</span><span class="pln"> </span><span class="com">// crossing anti-meridian</span><span class="pln">
+
+</span><span class="kwd">var</span><span class="pln"> </span><span class="pun">φ</span><span class="lit">3</span><span class="pln"> </span><span class="pun">=</span><span class="pln"> </span><span class="pun">(φ</span><span class="lit">1</span><span class="pun">+φ</span><span class="lit">2</span><span class="pun">)/</span><span class="lit">2</span><span class="pun">;</span><span class="pln">
+</span><span class="kwd">var</span><span class="pln"> f1 </span><span class="pun">=</span><span class="pln"> </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">tan</span><span class="pun">(</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">PI</span><span class="pun">/</span><span class="lit">4</span><span class="pln"> </span><span class="pun">+</span><span class="pln"> </span><span class="pun">φ</span><span class="lit">1</span><span class="pun">/</span><span class="lit">2</span><span class="pun">);</span><span class="pln">
+</span><span class="kwd">var</span><span class="pln"> f2 </span><span class="pun">=</span><span class="pln"> </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">tan</span><span class="pun">(</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">PI</span><span class="pun">/</span><span class="lit">4</span><span class="pln"> </span><span class="pun">+</span><span class="pln"> </span><span class="pun">φ</span><span class="lit">2</span><span class="pun">/</span><span class="lit">2</span><span class="pun">);</span><span class="pln">
+</span><span class="kwd">var</span><span class="pln"> f3 </span><span class="pun">=</span><span class="pln"> </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">tan</span><span class="pun">(</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">PI</span><span class="pun">/</span><span class="lit">4</span><span class="pln"> </span><span class="pun">+</span><span class="pln"> </span><span class="pun">φ</span><span class="lit">3</span><span class="pun">/</span><span class="lit">2</span><span class="pun">);</span><span class="pln">
+</span><span class="kwd">var</span><span class="pln"> </span><span class="pun">λ</span><span class="lit">3</span><span class="pln"> </span><span class="pun">=</span><span class="pln"> </span><span class="pun">(</span><span class="pln"> </span><span class="pun">(λ</span><span class="lit">2</span><span class="pun">-λ</span><span class="lit">1</span><span class="pun">)*</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">log</span><span class="pun">(</span><span class="pln">f3</span><span class="pun">)</span><span class="pln"> </span><span class="pun">+</span><span class="pln"> </span><span class="pun">λ</span><span class="lit">1</span><span class="pun">*</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">log</span><span class="pun">(</span><span class="pln">f2</span><span class="pun">)</span><span class="pln"> </span><span class="pun">-</span><span class="pln"> </span><span class="pun">λ</span><span class="lit">2</span><span class="pun">*</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">log</span><span class="pun">(</span><span class="pln">f1</span><span class="pun">)</span><span class="pln"> </span><span class="pun">)</span><span class="pln"> </span><span class="pun">/</span><span class="pln"> </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">log</span><span class="pun">(</span><span class="pln">f2</span><span class="pun">/</span><span class="pln">f1</span><span class="pun">);</span><span class="pln">
+
+</span><span class="kwd">if</span><span class="pln"> </span><span class="pun">(!</span><span class="pln">isFinite</span><span class="pun">(λ</span><span class="lit">3</span><span class="pun">))</span><span class="pln"> </span><span class="pun">λ</span><span class="lit">3</span><span class="pln"> </span><span class="pun">=</span><span class="pln"> </span><span class="pun">(λ</span><span class="lit">1</span><span class="pun">+λ</span><span class="lit">2</span><span class="pun">)/</span><span class="lit">2</span><span class="pun">;</span><span class="pln"> </span><span class="com">// parallel of latitude</span><span class="pln">
+
+</span><span class="pun">λ</span><span class="lit">3</span><span class="pln"> </span><span class="pun">=</span><span class="pln"> </span><span class="pun">(λ</span><span class="lit">3</span><span class="pun">+</span><span class="lit">3</span><span class="pun">*</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">PI</span><span class="pun">)</span><span class="pln"> </span><span class="pun">%</span><span class="pln"> </span><span class="pun">(</span><span class="lit">2</span><span class="pun">*</span><span class="typ">Math</span><span class="pun">.</span><span class="pln">PI</span><span class="pun">)</span><span class="pln"> </span><span class="pun">-</span><span class="pln"> </span><span class="typ">Math</span><span class="pun">.</span><span class="pln">PI</span><span class="pun">;</span><span class="pln">  </span><span class="com">// normalise to -180..+180º</span><span class="pln">
+    </span></pre></td>
+  </tr>
+</tbody></table>
+<hr>
+
+<h3 id="using">Using the scripts in web pages</h3>
+<p>Using these scripts in web pages would be something like the following:</p>
+<pre class="prettyprint"><span class="tag">&lt;script</span><span class="pln"> </span><span class="atn">src</span><span class="pun">=</span><span class="atv">"latlon.js"</span><span class="tag">&gt;</span><span class="com">/* Latitude/Longitude formulae */</span><span class="tag">&lt;/script&gt;</span><span class="pln">
+</span><span class="tag">&lt;script</span><span class="pln"> </span><span class="atn">src</span><span class="pun">=</span><span class="atv">"geo.js"</span><span class="tag">&gt;</span><span class="com">/* Geodesy representation conversions */</span><span class="tag">&lt;/script&gt;</span><span class="pln">
+...
+</span><span class="tag">&lt;form&gt;</span><span class="pln">
+  Lat1: </span><span class="tag">&lt;input</span><span class="pln"> </span><span class="atn">type</span><span class="pun">=</span><span class="atv">"text"</span><span class="pln"> </span><span class="atn">name</span><span class="pun">=</span><span class="atv">"lat1"</span><span class="pln"> </span><span class="atn">id</span><span class="pun">=</span><span class="atv">"lat1"</span><span class="tag">&gt;</span><span class="pln"> Lon1: </span><span class="tag">&lt;input</span><span class="pln"> </span><span class="atn">type</span><span class="pun">=</span><span class="atv">"text"</span><span class="pln"> </span><span class="atn">name</span><span class="pun">=</span><span class="atv">"lon1"</span><span class="pln"> </span><span class="atn">id</span><span class="pun">=</span><span class="atv">"lon1"</span><span class="tag">&gt;</span><span class="pln">
+  Lat2: </span><span class="tag">&lt;input</span><span class="pln"> </span><span class="atn">type</span><span class="pun">=</span><span class="atv">"text"</span><span class="pln"> </span><span class="atn">name</span><span class="pun">=</span><span class="atv">"lat2"</span><span class="pln"> </span><span class="atn">id</span><span class="pun">=</span><span class="atv">"lat2"</span><span class="tag">&gt;</span><span class="pln"> Lon2: </span><span class="tag">&lt;input</span><span class="pln"> </span><span class="atn">type</span><span class="pun">=</span><span class="atv">"text"</span><span class="pln"> </span><span class="atn">name</span><span class="pun">=</span><span class="atv">"lon2"</span><span class="pln"> </span><span class="atn">id</span><span class="pun">=</span><span class="atv">"lon2"</span><span class="tag">&gt;</span><span class="pln">
+  </span><span class="tag">&lt;button</span><span class="pln"> </span><span class="atn">onClick</span><span class="pun">=</span><span class="atv">"</span><span class="kwd">var</span><span class="pln"> p1 </span><span class="pun">=</span><span class="pln"> </span><span class="kwd">new</span><span class="pln"> </span><span class="typ">LatLon</span><span class="pun">(</span><span class="typ">Geo</span><span class="pun">.</span><span class="pln">parseDMS</span><span class="pun">(</span><span class="pln">f</span><span class="pun">.</span><span class="pln">lat1</span><span class="pun">.</span><span class="pln">value</span><span class="pun">),</span><span class="pln"> </span><span class="typ">Geo</span><span class="pun">.</span><span class="pln">parseDMS</span><span class="pun">(</span><span class="pln">f</span><span class="pun">.</span><span class="pln">lon1</span><span class="pun">.</span><span class="pln">value</span><span class="pun">));</span><span class="pln">
+                   </span><span class="kwd">var</span><span class="pln"> p2 </span><span class="pun">=</span><span class="pln"> </span><span class="kwd">new</span><span class="pln"> </span><span class="typ">LatLon</span><span class="pun">(</span><span class="typ">Geo</span><span class="pun">.</span><span class="pln">parseDMS</span><span class="pun">(</span><span class="pln">f</span><span class="pun">.</span><span class="pln">lat2</span><span class="pun">.</span><span class="pln">value</span><span class="pun">),</span><span class="pln"> </span><span class="typ">Geo</span><span class="pun">.</span><span class="pln">parseDMS</span><span class="pun">(</span><span class="pln">f</span><span class="pun">.</span><span class="pln">lon2</span><span class="pun">.</span><span class="pln">value</span><span class="pun">));</span><span class="pln">
+                   alert</span><span class="pun">(</span><span class="pln">p1</span><span class="pun">.</span><span class="pln">distanceTo</span><span class="pun">(</span><span class="pln">p2</span><span class="pun">));</span><span class="atv">"</span><span class="tag">&gt;</span><span class="pln">Calculate distance</span><span class="tag">&lt;/button&gt;</span><span class="pln">
+</span><span class="tag">&lt;/form&gt;</span></pre>
+<p>If you use jQuery, the code can be separated from the HTML:</p>
+    <pre class="prettyprint"><span class="tag">&lt;script</span><span class="pln"> </span><span class="atn">src</span><span class="pun">=</span><span class="atv">"//ajax.googleapis.com/ajax/libs/jquery/1.11.1/jquery.min.js"</span><span class="tag">&gt;&lt;/script&gt;</span><span class="pln">
+</span><span class="tag">&lt;script</span><span class="pln"> </span><span class="atn">src</span><span class="pun">=</span><span class="atv">"latlon.js"</span><span class="tag">&gt;</span><span class="com">/* Latitude/Longitude formulae */</span><span class="tag">&lt;/script&gt;</span><span class="pln">
+</span><span class="tag">&lt;script</span><span class="pln"> </span><span class="atn">src</span><span class="pun">=</span><span class="atv">"geo.js"</span><span class="tag">&gt;</span><span class="com">/* Geodesy representation conversions */</span><span class="tag">&lt;/script&gt;</span><span class="pln">
+</span><span class="tag">&lt;script&gt;</span><span class="pln">
+  $</span><span class="pun">(</span><span class="pln">document</span><span class="pun">).</span><span class="pln">ready</span><span class="pun">(</span><span class="kwd">function</span><span class="pun">()</span><span class="pln"> </span><span class="pun">{</span><span class="pln">
+    $</span><span class="pun">(</span><span class="str">'#calc-dist'</span><span class="pun">).</span><span class="pln">click</span><span class="pun">(</span><span class="kwd">function</span><span class="pun">()</span><span class="pln"> </span><span class="pun">{</span><span class="pln">
+      </span><span class="kwd">var</span><span class="pln"> p1 </span><span class="pun">=</span><span class="pln"> </span><span class="kwd">new</span><span class="pln"> </span><span class="typ">LatLon</span><span class="pun">(</span><span class="typ">Geo</span><span class="pun">.</span><span class="pln">parseDMS</span><span class="pun">(</span><span class="pln">$</span><span class="pun">(</span><span class="str">'#lat1'</span><span class="pun">).</span><span class="pln">val</span><span class="pun">()),</span><span class="pln"> </span><span class="typ">Geo</span><span class="pun">.</span><span class="pln">parseDMS</span><span class="pun">(</span><span class="pln">$</span><span class="pun">(</span><span class="str">'#lon1'</span><span class="pun">).</span><span class="pln">val</span><span class="pun">()));</span><span class="pln">
+      </span><span class="kwd">var</span><span class="pln"> p2 </span><span class="pun">=</span><span class="pln"> </span><span class="kwd">new</span><span class="pln"> </span><span class="typ">LatLon</span><span class="pun">(</span><span class="typ">Geo</span><span class="pun">.</span><span class="pln">parseDMS</span><span class="pun">(</span><span class="pln">$</span><span class="pun">(</span><span class="str">'#lat2'</span><span class="pun">).</span><span class="pln">val</span><span class="pun">()),</span><span class="pln"> </span><span class="typ">Geo</span><span class="pun">.</span><span class="pln">parseDMS</span><span class="pun">(</span><span class="pln">$</span><span class="pun">(</span><span class="str">'#lon2'</span><span class="pun">).</span><span class="pln">val</span><span class="pun">()));</span><span class="pln">
+      $</span><span class="pun">(</span><span class="str">'#result-distance'</span><span class="pun">).</span><span class="pln">html</span><span class="pun">(</span><span class="pln">p1</span><span class="pun">.</span><span class="pln">distanceTo</span><span class="pun">(</span><span class="pln">p2</span><span class="pun">)+</span><span class="str">' km'</span><span class="pun">);</span><span class="pln">
+    </span><span class="pun">});</span><span class="pln">
+  </span><span class="pun">});</span><span class="pln">
+</span><span class="tag">&lt;/script&gt;</span><span class="pln">
+...
+</span><span class="tag">&lt;form&gt;</span><span class="pln">
+  Lat1: </span><span class="tag">&lt;input</span><span class="pln"> </span><span class="atn">type</span><span class="pun">=</span><span class="atv">"text"</span><span class="pln"> </span><span class="atn">name</span><span class="pun">=</span><span class="atv">"lat1"</span><span class="pln"> </span><span class="atn">id</span><span class="pun">=</span><span class="atv">"lat1"</span><span class="tag">&gt;</span><span class="pln"> Lon1: </span><span class="tag">&lt;input</span><span class="pln"> </span><span class="atn">type</span><span class="pun">=</span><span class="atv">"text"</span><span class="pln"> </span><span class="atn">name</span><span class="pun">=</span><span class="atv">"lon1"</span><span class="pln"> </span><span class="atn">id</span><span class="pun">=</span><span class="atv">"lon1"</span><span class="tag">&gt;</span><span class="pln">
+  Lat2: </span><span class="tag">&lt;input</span><span class="pln"> </span><span class="atn">type</span><span class="pun">=</span><span class="atv">"text"</span><span class="pln"> </span><span class="atn">name</span><span class="pun">=</span><span class="atv">"lat2"</span><span class="pln"> </span><span class="atn">id</span><span class="pun">=</span><span class="atv">"lat2"</span><span class="tag">&gt;</span><span class="pln"> Lon2: </span><span class="tag">&lt;input</span><span class="pln"> </span><span class="atn">type</span><span class="pun">=</span><span class="atv">"text"</span><span class="pln"> </span><span class="atn">name</span><span class="pun">=</span><span class="atv">"lon2"</span><span class="pln"> </span><span class="atn">id</span><span class="pun">=</span><span class="atv">"lon2"</span><span class="tag">&gt;</span><span class="pln">
+  </span><span class="tag">&lt;button</span><span class="pln"> </span><span class="atn">id</span><span class="pun">=</span><span class="atv">"calc-dist"</span><span class="tag">&gt;</span><span class="pln">Calculate distance</span><span class="tag">&lt;/button&gt;</span><span class="pln">
+  </span><span class="tag">&lt;output</span><span class="pln"> </span><span class="atn">id</span><span class="pun">=</span><span class="atv">"result-distance"</span><span class="tag">&gt;&lt;/output&gt;</span><span class="pln">
+</span><span class="tag">&lt;/form&gt;</span></pre>
+<hr>
+    
+<h3 id="convertDecDMS">Convert between degrees-minutes-seconds &amp; decimal degrees</h3>
+
+<form name="convert" id="convert">
+<table class="note">
+  <tbody><tr>
+    <td>Latitude</td>
+    <td>Longitude</td>
+    <td colspan="2">1° ≈ 111 km <span class="grey">(110.57 eq’l — 111.70 polar)</span></td>
+  </tr>
+  <tr>
+    <td><input name="latDMS" id="latDMS" value="52°12′17.0″N" class="note w8" type="text"></td>
+    <td><input name="lonDMS" id="lonDMS" value="000°08′26.0″E" class="note w8" type="text"></td>
+    <td>1′ ≈ 1.85 km <span class="grey">(= 1 nm)</span></td>
+    <td>0.01° ≈ 1.11 km</td>
+  </tr>
+  <tr>
+    <td><input name="latDec" id="latDec" value="52.20472" class="note w8" type="text"></td>
+    <td><input name="lonDec" id="lonDec" value="0.14056" class="note w8" type="text"></td>
+    <td>1″ ≈ 30.9 m</td>
+    <td>0.0001° ≈ 11.1 m</td>
+  </tr>
+</tbody></table>
+</form>
+
+<p class="note">No, I’ve not included decimal minutes: a decimal system is easy, a sexagesimal
+  system has merits, but mixing the two is a complete sow’s ear. Switch off the option on your GPS!</p>
+<form>Display calculation results as: 
+  <input checked="checked" name="degFormat" id="degFormatdms" value="dms" type="radio"> deg/min/sec
+  <input name="degFormat" id="degFormatd" value="d" type="radio"> decimal degrees
+</form>
+
+<hr>
+
+<p id="notes"><i>Notes:</i></p>
+<ul class="note">
+  <li id="ellipsoid">Accuracy: since the earth is not quite a sphere, there are small errors in
+    using spherical geometry; the earth is actually roughly <b>ellipsoidal</b> (or more precisely,
+    oblate spheroidal) with a radius varying between about 6,378km (equatorial) and 6,357km (polar),
+    and local radius of curvature varying from 6,336km (equatorial meridian) to 6,399km (polar).
+    6,371 km is the generally accepted value for the Earth’s mean radius. This means that errors
+    from assuming spherical geometry might be up to 0.55% crossing the equator, though generally
+    below 0.3%, depending on latitude and direction of travel. An accuracy of better than 3m in
+    1km is mostly good enough for me, but if you want greater accuracy, you could use the <a href="http://www.movable-type.co.uk/scripts/latlong-vincenty.html">Vincenty</a> formula
+    for calculating geodesic distances on ellipsoids, which gives results accurate to within 1mm.
+    (Out of sheer perversity – I’ve never needed such accuracy – I looked up this formula and discovered
+    the JavaScript implementation was simpler than I expected).</li>
+  <li>Trig functions take arguments in <b>radians</b>, so latitude, longitude, and 
+    bearings in <b>degrees</b> (either decimal or degrees/minutes/seconds) need to be converted
+    to radians, rad = π.deg/180. When converting radians back to degrees (deg = 180.rad/π),
+     West is negative if using signed decimal degrees. For bearings, values in the range -π to
+      +π [-180° to +180°] need to be converted to 0 to +2π [0°–360°]; this
+      can  be done by (brng+2.π)%2.π [or brng+360)%360] where % is the modulo operator.</li>
+  <li>The <b>atan2</b>() function widely used here takes two arguments, atan2(y, x), and computes 
+    the arc tangent of the ratio y/x. It is more flexible than atan(y/x), since it handles x=0, 
+    and it also returns values in all 4 quadrants -π to +π (the atan function returns values 
+    in the range -π/2 to +π/2).</li>
+  <li>All bearings are with respect to <b>true north</b>, 0°=N, 90°=E, etc; if you are working
+    from a compass, magnetic north varies from true north in a complex way around the earth,
+    and the difference has to be compensated for by variances indicated on local maps.</li>
+  <li>If you implement any formula involving atan2 in Microsoft <b>Excel</b>, you will need to
+    reverse  the arguments, as <a target="_blank" href="http://office.microsoft.com/en-gb/excel/HP052089911033.aspx">Excel</a> 
+    has them the opposite way around from <a target="_blank" href="https://developer.mozilla.org/en/Core_JavaScript_1.5_Reference/Objects/Math/atan2">JavaScript</a> 
+    – conventional order is atan2(y, x), but Excel uses atan2(x, y). To use atan2 in a (VBA) macro,
+  you can use WorksheetFunction.Atan2(). </li>
+  <li>If you are using <b>Google Maps</b>, several of these functions are now provided in the Google
+    Maps API V3 ‘spherical’ library (computeDistanceBetween(), computeHeading(), computeOffset(),
+    interpolate(), etc; note they use a default Earth radius of 6,378,137 meters).</li>
+  <li>If you use Ordnance Survey Grid References, I have implemented a script for <a href="http://www.movable-type.co.uk/scripts/latlong-gridref.html">converting 
+  between Lat/Long &amp; OS Grid References</a>.</li>
+  <li>I learned a lot from the US Census Bureau <a href="http://www.movable-type.co.uk/scripts/gis-faq-5.1.html">GIS 
+    FAQ</a> which is no longer available, so I’ve made a copy.</li>
+  <li>Thanks to Ed Williams’ <a target="_blank" href="http://williams.best.vwh.net/avform.htm">Aviation
+       Formulary</a> for many of the formulæ.</li>
+  <li>For <b>miles</b>, divide km by 1.609344</li>
+  <li>For <b>nautical miles</b>, divide km by 1.852</li>
+</ul>
+
+<hr class="fullwidth">
+
+<p id="postscript">See below for the source code of the JavaScript implementation. 
+  These functions should be simple to translate into other languages if required. </p>
+<p><i><b>Update January 2010</b></i>: I have revised the scripts to be structured as methods of
+  a LatLon object. Of course, JavaScript is a <a target="_blank" href="https://developer.mozilla.org/en/Core_JavaScript_1.5_Guide/Details_of_the_Object_Model">prototype-based
+  rather than class-based</a> language,
+  so this is only nominally a class, but isolating code into a separate namespace is good JavaScript
+  practice, and this approach may also make it clearer to implement these functions in other languages.
+  If you’re not familiar with JavaScript syntax, <code>LatLon.prototype.distanceTo = function(point)
+  { ... }</code>, for instance, defines a ‘<code>distanceTo</code>’ method of the <code>LatLon</code> object
+  (/class) which takes a <code>LatLon</code> object as a parameter (and returns a number). The
+  Geo namespace acts as a static class for geodesy formatting / parsing / conversion functions.
+  I have extended (polluted, if you like) the base JavaScript object prototypes with trim(), toRadians()
+  toDegrees(), and toPrecisionFixed() methods. I’ve adopted JSDoc format for the descriptions. </p>
+<p>I have also created a page illustrating the use of the spherical law of cosines for <a href="http://www.movable-type.co.uk/scripts/latlong-db.html">selecting
+  points from a database</a> within a specified bounding circle – the example is based on MySQL+PDO,
+  but should be extensible to other DBMS platforms.</p>
+<p id="spreadsheets">Several  people have asked about  example <b>Excel</b> spreadsheets, so I have implemented the
+  <a href="http://www.movable-type.co.uk/scripts/latlong-distance+bearing.xls">distance &amp; bearing</a> and the <a href="http://www.movable-type.co.uk/scripts/latlong-dest-point.xls">destination
+  point</a> formulæ as spreadsheets, in a form which breaks down the all stages involved to illustrate
+  the operation.</p>
+<p id="licence"><a target="_blank" rel="license" href="http://creativecommons.org/licenses/by/3.0/" class="float-right"><img alt="Creative Commons License" style="margin: 4px;" src="latlongDist_files/88x31.png"></a>
+  I offer these formulæ &amp; scripts for free use and adaptation as my contribution to the open-source
+  info-sphere from which I have received so much. You are welcome to re-use these scripts [under
+  a simple <a target="_blank" rel="license" href="http://creativecommons.org/licenses/by/3.0/">attribution</a> license, without
+  any warranty express or implied] provided solely that you retain my copyright notice and a
+  reference to this page.</p>
+<p id="donate"><a target="_blank" href="https://www.paypal.com/cgi-bin/webscr?cmd=_s-xclick&amp;hosted_button_id=3737803" class="float-right"><img alt="Paypal donation" style="margin: 4px;" src="latlongDist_files/btn_donate_SM.gif"></a>
+If you would like to show your appreciation and support continued development of these scripts,
+  I would most gratefully accept <a target="_blank" href="https://www.paypal.com/cgi-bin/webscr?cmd=_s-xclick&amp;hosted_button_id=3737803" title="Thank you!">donations</a>.</p>
+<p>If you need any advice or development work done, I am available for consultancy.</p>
+<p>If you have any queries or find any problems, contact me at <span class="rtl"><a href="mailto:scripts-geo@movable-type.co.uk" rel="nofollow">ku.oc.epyt-elbavom@oeg-stpircs</a></span>.</p>
+<p class="note"><i>© 2002-2014 Chris Veness</i></p>
+
+<hr class="fullwidth">
+<pre class="fullwidth code prettyprint" id="latlon-src">/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -  */
+/*  Latitude/longitude spherical geodesy formulae &amp; scripts (c) Chris Veness 2002-2014            */
+/*   - www.movable-type.co.uk/scripts/latlong.html                                                */
+/*                                                                                                */
+/*  Sample usage:                                                                                 */
+/*    var p1 = new LatLon(51.5136, -0.0983);                                                      */
+/*    var p2 = new LatLon(51.4778, -0.0015);                                                      */
+/*    var dist = p1.distanceTo(p2);          // in km                                             */
+/*    var brng = p1.bearingTo(p2);           // in degrees clockwise from north                   */
+/*    ... etc                                                                                     */
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -  */
+
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -  */
+/*  Note that minimal error checking is performed in this example code!                           */
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -  */
+
+
+/**
+ * Object LatLon: tools for geodetic calculations
+ *
+ * @requires Geo
+ */
+ 
+ 
+/**
+ * Creates a point on the earth's surface at the supplied latitude / longitude
+ *
+ * @constructor
+ * @param {Number} lat: latitude in degrees
+ * @param {Number} lon: longitude in degrees
+ * @param {Number} [radius=6371]: radius of earth if different value is required from standard 6,371km
+ */
+function LatLon(lat, lon, radius) {
+    if (typeof(radius) == 'undefined') radius = 6371;  // earth's mean radius in km
+
+    this.lat    = Number(lat);
+    this.lon    = Number(lon);
+    this.radius = Number(radius);
+}
+
+
+/**
+ * Returns the distance from this point to the supplied point (using haversine formula)
+ *
+ * @this    {LatLon} latitude/longitude of origin point
+ * @param   {LatLon} point: latitude/longitude of destination point
+ * @param   {Number} [precision=4]: number of significant digits to use for returned value
+ * @returns {Number} distance between this point and destination point, in km
+ */
+LatLon.prototype.distanceTo = function(point, precision) {
+    // default 4 significant figures reflects typical 0.3% accuracy of spherical model
+    if (typeof precision == 'undefined') precision = 4;
+  
+    var R = this.radius;
+    var φ1 = this.lat.toRadians(),  λ1 = this.lon.toRadians();
+    var φ2 = point.lat.toRadians(), λ2 = point.lon.toRadians();
+    var Δφ = φ2 - φ1;
+    var Δλ = λ2 - λ1;
+
+    var a = Math.sin(Δφ/2) * Math.sin(Δφ/2) +
+            Math.cos(φ1) * Math.cos(φ2) *
+            Math.sin(Δλ/2) * Math.sin(Δλ/2);
+    var c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    var d = R * c;
+
+    return d.toPrecisionFixed(Number(precision));
+}
+
+
+/**
+ * Returns the (initial) bearing from this point to the supplied point, in degrees
+ *   see http://williams.best.vwh.net/avform.htm#Crs
+ *
+ * @this    {LatLon} latitude/longitude of origin point
+ * @param   {LatLon} point: latitude/longitude of destination point
+ * @returns {Number} initial bearing in degrees from North
+ */
+LatLon.prototype.bearingTo = function(point) {
+    var φ1 = this.lat.toRadians(), φ2 = point.lat.toRadians();
+    var Δλ = (point.lon-this.lon).toRadians();
+
+    var y = Math.sin(Δλ) * Math.cos(φ2);
+    var x = Math.cos(φ1)*Math.sin(φ2) -
+            Math.sin(φ1)*Math.cos(φ2)*Math.cos(Δλ);
+    var θ = Math.atan2(y, x);
+  
+    return (θ.toDegrees()+360) % 360;
+}
+
+
+/**
+ * Returns final bearing arriving at supplied destination point from this point; the final bearing 
+ * will differ from the initial bearing by varying degrees according to distance and latitude
+ *
+ * @this    {LatLon} latitude/longitude of origin point
+ * @param   {LatLon} point: latitude/longitude of destination point
+ * @returns {Number} final bearing in degrees from North
+ */
+LatLon.prototype.finalBearingTo = function(point) {
+    // get initial bearing from supplied point back to this point...
+    var φ1 = point.lat.toRadians(), φ2 = this.lat.toRadians();
+    var Δλ = (this.lon-point.lon).toRadians();
+
+    var y = Math.sin(Δλ) * Math.cos(φ2);
+    var x = Math.cos(φ1)*Math.sin(φ2) -
+            Math.sin(φ1)*Math.cos(φ2)*Math.cos(Δλ);
+    var θ = Math.atan2(y, x);
+
+    // ... &amp; reverse it by adding 180°
+    return (θ.toDegrees()+180) % 360;
+}
+
+
+/**
+ * Returns the midpoint between this point and the supplied point.
+ *   see http://mathforum.org/library/drmath/view/51822.html for derivation
+ *
+ * @this    {LatLon} latitude/longitude of origin point
+ * @param   {LatLon} point: latitude/longitude of destination point
+ * @returns {LatLon} midpoint between this point and the supplied point
+ */
+LatLon.prototype.midpointTo = function(point) {
+    var φ1 = this.lat.toRadians(), λ1 = this.lon.toRadians();
+    var φ2 = point.lat.toRadians();
+    var Δλ = (point.lon-this.lon).toRadians();
+
+    var Bx = Math.cos(φ2) * Math.cos(Δλ);
+    var By = Math.cos(φ2) * Math.sin(Δλ);
+
+    var φ3 = Math.atan2(Math.sin(φ1)+Math.sin(φ2),
+                    Math.sqrt( (Math.cos(φ1)+Bx)*(Math.cos(φ1)+Bx) + By*By) );
+    var λ3 = λ1 + Math.atan2(By, Math.cos(φ1) + Bx);
+    λ3 = (λ3+3*Math.PI) % (2*Math.PI) - Math.PI; // normalise to -180..+180º
+
+    return new LatLon(φ3.toDegrees(), λ3.toDegrees());
+}
+
+
+/**
+ * Returns the destination point from this point having travelled the given distance (in km) on the 
+ * given initial bearing (bearing may vary before destination is reached)
+ *
+ *   see http://williams.best.vwh.net/avform.htm#LL
+ *
+ * @this    {LatLon} latitude/longitude of origin point
+ * @param   {Number} brng: initial bearing in degrees
+ * @param   {Number} dist: distance in km
+ * @returns {LatLon} destination point
+ */
+LatLon.prototype.destinationPoint = function(brng, dist) {
+    var θ = Number(brng).toRadians();
+    var δ = Number(dist) / this.radius; // angular distance in radians
+
+    var φ1 = this.lat.toRadians();
+    var λ1 = this.lon.toRadians();
+
+    var φ2 = Math.asin( Math.sin(φ1)*Math.cos(δ) +
+                        Math.cos(φ1)*Math.sin(δ)*Math.cos(θ) );
+    var λ2 = λ1 + Math.atan2(Math.sin(θ)*Math.sin(δ)*Math.cos(φ1),
+                             Math.cos(δ)-Math.sin(φ1)*Math.sin(φ2));
+    λ2 = (λ2+3*Math.PI) % (2*Math.PI) - Math.PI; // normalise to -180..+180º
+
+    return new LatLon(φ2.toDegrees(), λ2.toDegrees());
+}
+
+
+/**
+ * Returns the point of intersection of two paths defined by point and bearing
+ *
+ *   see http://williams.best.vwh.net/avform.htm#Intersection
+ *
+ * @param   {LatLon} p1: first point
+ * @param   {Number} brng1: initial bearing from first point
+ * @param   {LatLon} p2: second point
+ * @param   {Number} brng2: initial bearing from second point
+ * @returns {LatLon} destination point (null if no unique intersection defined)
+ */
+LatLon.intersection = function(p1, brng1, p2, brng2) {
+    var φ1 = p1.lat.toRadians(), λ1 = p1.lon.toRadians();
+    var φ2 = p2.lat.toRadians(), λ2 = p2.lon.toRadians();
+    var θ13 = Number(brng1).toRadians(), θ23 = Number(brng2).toRadians();
+    var Δφ = φ2-φ1, Δλ = λ2-λ1;
+
+    var δ12 = 2*Math.asin( Math.sqrt( Math.sin(Δφ/2)*Math.sin(Δφ/2) +
+        Math.cos(φ1)*Math.cos(φ2)*Math.sin(Δλ/2)*Math.sin(Δλ/2) ) );
+    if (δ12 == 0) return null;
+
+    // initial/final bearings between points
+    var θ1 = Math.acos( ( Math.sin(φ2) - Math.sin(φ1)*Math.cos(δ12) ) /
+           ( Math.sin(δ12)*Math.cos(φ1) ) );
+    if (isNaN(θ1)) θ1 = 0; // protect against rounding
+    var θ2 = Math.acos( ( Math.sin(φ1) - Math.sin(φ2)*Math.cos(δ12) ) /
+           ( Math.sin(δ12)*Math.cos(φ2) ) );
+
+    if (Math.sin(λ2-λ1) &gt; 0) {
+        θ12 = θ1;
+        θ21 = 2*Math.PI - θ2;
+    } else {
+        θ12 = 2*Math.PI - θ1;
+        θ21 = θ2;
+    }
+
+    var α1 = (θ13 - θ12 + Math.PI) % (2*Math.PI) - Math.PI; // angle 2-1-3
+    var α2 = (θ21 - θ23 + Math.PI) % (2*Math.PI) - Math.PI; // angle 1-2-3
+
+    if (Math.sin(α1)==0 &amp;&amp; Math.sin(α2)==0) return null; // infinite intersections
+    if (Math.sin(α1)*Math.sin(α2) &lt; 0) return null;      // ambiguous intersection
+
+    //α1 = Math.abs(α1);
+    //α2 = Math.abs(α2);
+    // ... Ed Williams takes abs of α1/α2, but seems to break calculation?
+
+    var α3 = Math.acos( -Math.cos(α1)*Math.cos(α2) +
+                         Math.sin(α1)*Math.sin(α2)*Math.cos(δ12) );
+    var δ13 = Math.atan2( Math.sin(δ12)*Math.sin(α1)*Math.sin(α2),
+                          Math.cos(α2)+Math.cos(α1)*Math.cos(α3) )
+    var φ3 = Math.asin( Math.sin(φ1)*Math.cos(δ13) +
+                        Math.cos(φ1)*Math.sin(δ13)*Math.cos(θ13) );
+    var Δλ13 = Math.atan2( Math.sin(θ13)*Math.sin(δ13)*Math.cos(φ1),
+                           Math.cos(δ13)-Math.sin(φ1)*Math.sin(φ3) );
+    var λ3 = λ1 + Δλ13;
+    λ3 = (λ3+3*Math.PI) % (2*Math.PI) - Math.PI; // normalise to -180..+180º
+
+    return new LatLon(φ3.toDegrees(), λ3.toDegrees());
+}
+
+
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -  */
+
+/**
+ * Returns the distance from this point to the supplied point, in km, travelling along a rhumb line
+ *
+ *   see http://williams.best.vwh.net/avform.htm#Rhumb
+ *
+ * @this    {LatLon} latitude/longitude of origin point
+ * @param   {LatLon} point: latitude/longitude of destination point
+ * @returns {Number} distance in km between this point and destination point
+ */
+LatLon.prototype.rhumbDistanceTo = function(point) {
+    var R = this.radius;
+    var φ1 = this.lat.toRadians(), φ2 = point.lat.toRadians();
+    var Δφ = φ2 - φ1;
+    var Δλ = Math.abs(point.lon-this.lon).toRadians();
+    // if dLon over 180° take shorter rhumb line across the anti-meridian:
+    if (Math.abs(Δλ) &gt; Math.PI) Δλ = Δλ&gt;0 ? -(2*Math.PI-Δλ) : (2*Math.PI+Δλ);
+
+    // on Mercator projection, longitude gets increasing stretched by latitude; q is the 'stretch factor'
+
+    var Δψ = Math.log(Math.tan(φ2/2+Math.PI/4)/Math.tan(φ1/2+Math.PI/4));
+
+    // the stretch factor becomes ill-conditioned along E-W line (0/0); use empirical tolerance to avoid it
+    var q = Math.abs(Δψ) &gt; 10e-12 ? Δφ/Δψ : Math.cos(φ1);
+
+    // distance is pythagoras on 'stretched' Mercator projection
+    var δ = Math.sqrt(Δφ*Δφ + q*q*Δλ*Δλ); // angular distance in radians
+    var dist = δ * R;
+
+    return dist.toPrecisionFixed(4); // 4 sig figs reflects typical 0.3% accuracy of spherical model
+}
+
+
+/**
+ * Returns the bearing from this point to the supplied point along a rhumb line, in degrees
+ *
+ * @this    {LatLon} latitude/longitude of origin point
+ * @param   {LatLon} point: latitude/longitude of destination point
+ * @returns {Number} bearing in degrees from North
+ */
+LatLon.prototype.rhumbBearingTo = function(point) {
+    var φ1 = this.lat.toRadians(), φ2 = point.lat.toRadians();
+    var Δλ = (point.lon-this.lon).toRadians();
+    // if dLon over 180° take shorter rhumb line across the anti-meridian:
+    if (Math.abs(Δλ) &gt; Math.PI) Δλ = Δλ&gt;0 ? -(2*Math.PI-Δλ) : (2*Math.PI+Δλ);
+
+    var Δψ = Math.log(Math.tan(φ2/2+Math.PI/4)/Math.tan(φ1/2+Math.PI/4));
+
+    var θ = Math.atan2(Δλ, Δψ);
+
+    return (θ.toDegrees()+360) % 360;
+}
+
+
+/**
+ * Returns the destination point from this point having travelled the given distance (in km) on the 
+ * given bearing along a rhumb line
+ *
+ * @this    {LatLon} latitude/longitude of origin point
+ * @param   {Number} brng: bearing in degrees from North
+ * @param   {Number} dist: distance in km
+ * @returns {LatLon} destination point
+ */
+LatLon.prototype.rhumbDestinationPoint = function(brng, dist) {
+    var δ = Number(dist) / this.radius; // angular distance in radians
+    var φ1 = this.lat.toRadians(), λ1 = this.lon.toRadians();
+    var θ = Number(brng).toRadians();
+
+    var Δφ = δ * Math.cos(θ);
+
+    var φ2 = φ1 + Δφ;
+    // check for some daft bugger going past the pole, normalise latitude if so
+    if (Math.abs(φ2) &gt; Math.PI/2) φ2 = φ2&gt;0 ? Math.PI-φ2 : -Math.PI-φ2;
+
+    var Δψ = Math.log(Math.tan(φ2/2+Math.PI/4)/Math.tan(φ1/2+Math.PI/4));
+    var q = Math.abs(Δψ) &gt; 10e-12 ? Δφ / Δψ : Math.cos(φ1); // E-W course becomes ill-conditioned with 0/0
+
+    var Δλ = δ*Math.sin(θ)/q;
+
+    var λ2 = λ1 + Δλ;
+
+    λ2 = (λ2 + 3*Math.PI) % (2*Math.PI) - Math.PI; // normalise to -180..+180º
+
+    return new LatLon(φ2.toDegrees(), λ2.toDegrees());
+}
+
+
+/**
+ * Returns the loxodromic midpoint (along a rhumb line) between this point and the supplied point.
+ *   see http://mathforum.org/kb/message.jspa?messageID=148837
+ *
+ * @this    {LatLon} latitude/longitude of origin point
+ * @param   {LatLon} point: latitude/longitude of destination point
+ * @returns {LatLon} midpoint between this point and the supplied point
+ */
+LatLon.prototype.rhumbMidpointTo = function(point) {
+    var φ1 = this.lat.toRadians(), λ1 = this.lon.toRadians();
+    var φ2 = point.lat.toRadians(), λ2 = point.lon.toRadians();
+
+    if (Math.abs(λ2-λ1) &gt; Math.PI) λ1 += 2*Math.PI; // crossing anti-meridian
+
+    var φ3 = (φ1+φ2)/2;
+    var f1 = Math.tan(Math.PI/4 + φ1/2);
+    var f2 = Math.tan(Math.PI/4 + φ2/2);
+    var f3 = Math.tan(Math.PI/4 + φ3/2);
+    var λ3 = ( (λ2-λ1)*Math.log(f3) + λ1*Math.log(f2) - λ2*Math.log(f1) ) / Math.log(f2/f1);
+
+    if (!isFinite(λ3)) λ3 = (λ1+λ2)/2; // parallel of latitude
+
+    λ3 = (λ3 + 3*Math.PI) % (2*Math.PI) - Math.PI; // normalise to -180..+180º
+
+    return new LatLon(φ3.toDegrees(), λ3.toDegrees());
+}
+
+
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -  */
+
+
+/**
+ * Returns a string representation of this point; format and dp as per lat()/lon()
+ *
+ * @this    {LatLon} latitude/longitude of origin point
+ * @param   {String} [format]: return value as 'd', 'dm', 'dms'
+ * @param   {Number} [dp=0|2|4]: number of decimal places to display
+ * @returns {String} comma-separated latitude/longitude
+ */
+LatLon.prototype.toString = function(format, dp) {
+    if (typeof format == 'undefined') format = 'dms';
+
+    return Geo.toLat(this.lat, format, dp) + ', ' + Geo.toLon(this.lon, format, dp);
+}
+
+
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -  */
+
+
+// ---- extend Number object with methods for converting degrees/radians
+
+
+/** Converts numeric degrees to radians */
+if (typeof Number.prototype.toRadians == 'undefined') {
+    Number.prototype.toRadians = function() {
+        return this * Math.PI / 180;
+    }
+}
+
+
+/** Converts radians to numeric (signed) degrees */
+if (typeof Number.prototype.toDegrees == 'undefined') {
+    Number.prototype.toDegrees = function() {
+        return this * 180 / Math.PI;
+    }
+}
+
+
+/** 
+ * Formats the significant digits of a number, using only fixed-point notation (no exponential)
+ * 
+ * @param   {Number} precision: Number of significant digits to appear in the returned string
+ * @returns {String} A string representation of number which contains precision significant digits
+ */
+if (typeof Number.prototype.toPrecisionFixed == 'undefined') {
+    Number.prototype.toPrecisionFixed = function(precision) {
+
+    // use standard toPrecision method
+    var n = this.toPrecision(precision);
+
+    // ... but replace +ve exponential format with trailing zeros
+    n = n.replace(/(.+)e\+(.+)/, function(n, sig, exp) {
+        sig = sig.replace(/\./, '');       // remove decimal from significand
+        l = sig.length - 1;
+        while (exp-- &gt; l) sig = sig + '0'; // append zeros from exponent
+        return sig;
+    });
+
+    // ... and replace -ve exponential format with leading zeros
+    n = n.replace(/(.+)e-(.+)/, function(n, sig, exp) {
+        sig = sig.replace(/\./, '');       // remove decimal from significand
+        while (exp-- &gt; 1) sig = '0' + sig; // prepend zeros from exponent
+        return '0.' + sig;
+    });
+
+    return n;
+  }
+}
+
+
+/** Trims whitespace from string (q.v. blog.stevenlevithan.com/archives/faster-trim-javascript) */
+if (typeof String.prototype.trim == 'undefined') {
+    String.prototype.trim = function() {
+        return String(this).replace(/^\s\s*/, '').replace(/\s\s*$/, '');
+    }
+}
+
+
+/** Returns the sign of a number, indicating whether the number is positive, negative or zero */
+if (typeof Math.sign == 'undefined') {
+    // stackoverflow.com/questions/7624920/number-sign-in-javascript
+    Math.sign = function(x) {
+        return typeof x === 'number' ? x ? x &lt; 0 ? -1 : 1 : x === x ? 0 : NaN : NaN;
+    }
+}
+
+
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -  */
+if (!window.console) window.console = { log: function() {} };
+</pre>
+
+<hr class="fullwidth">
+<pre class="fullwidth code prettyprint" id="geo-src">/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -  */
+/*  Geodesy representation conversion functions (c) Chris Veness 2002-2012                        */
+/*   - www.movable-type.co.uk/scripts/latlong.html                                                */
+/*                                                                                                */
+/*  Sample usage:                                                                                 */
+/*    var lat = Geo.parseDMS('51° 28′ 40.12″ N');                                                 */
+/*    var lon = Geo.parseDMS('000° 00′ 05.31″ W');                                                */
+/*    var p1 = new LatLon(lat, lon);                                                              */
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -  */
+
+
+var Geo = {};  // Geo namespace, representing static class
+
+
+/**
+ * Parses string representing degrees/minutes/seconds into numeric degrees
+ *
+ * This is very flexible on formats, allowing signed decimal degrees, or deg-min-sec optionally
+ * suffixed by compass direction (NSEW). A variety of separators are accepted (eg 3º 37' 09"W) 
+ * or fixed-width format without separators (eg 0033709W). Seconds and minutes may be omitted. 
+ * (Note minimal validation is done).
+ *
+ * @param   {String|Number} dmsStr: Degrees or deg/min/sec in variety of formats
+ * @returns {Number} Degrees as decimal number
+ * @throws  {TypeError} dmsStr is an object, perhaps DOM object without .value?
+ */
+Geo.parseDMS = function(dmsStr) {
+  if (typeof deg == 'object') throw new TypeError('Geo.parseDMS - dmsStr is [DOM?] object');
+  
+  // check for signed decimal degrees without NSEW, if so return it directly
+  if (typeof dmsStr === 'number' &amp;&amp; isFinite(dmsStr)) return Number(dmsStr);
+  
+  // strip off any sign or compass dir'n &amp; split out separate d/m/s
+  var dms = String(dmsStr).trim().replace(/^-/,'').replace(/[NSEW]$/i,'').split(/[^0-9.,]+/);
+  if (dms[dms.length-1]=='') dms.splice(dms.length-1);  // from trailing symbol
+  
+  if (dms == '') return NaN;
+  
+  // and convert to decimal degrees...
+  switch (dms.length) {
+    case 3:  // interpret 3-part result as d/m/s
+      var deg = dms[0]/1 + dms[1]/60 + dms[2]/3600; 
+      break;
+    case 2:  // interpret 2-part result as d/m
+      var deg = dms[0]/1 + dms[1]/60; 
+      break;
+    case 1:  // just d (possibly decimal) or non-separated dddmmss
+      var deg = dms[0];
+      // check for fixed-width unseparated format eg 0033709W
+      //if (/[NS]/i.test(dmsStr)) deg = '0' + deg;  // - normalise N/S to 3-digit degrees
+      //if (/[0-9]{7}/.test(deg)) deg = deg.slice(0,3)/1 + deg.slice(3,5)/60 + deg.slice(5)/3600; 
+      break;
+    default:
+      return NaN;
+  }
+  if (/^-|[WS]$/i.test(dmsStr.trim())) deg = -deg; // take '-', west and south as -ve
+  return Number(deg);
+}
+
+
+/**
+ * Convert decimal degrees to deg/min/sec format
+ *  - degree, prime, double-prime symbols are added, but sign is discarded, though no compass
+ *    direction is added
+ *
+ * @private
+ * @param   {Number} deg: Degrees
+ * @param   {String} [format=dms]: Return value as 'd', 'dm', 'dms'
+ * @param   {Number} [dp=0|2|4]: No of decimal places to use - default 0 for dms, 2 for dm, 4 for d
+ * @returns {String} deg formatted as deg/min/secs according to specified format
+ * @throws  {TypeError} deg is an object, perhaps DOM object without .value?
+ */
+Geo.toDMS = function(deg, format, dp) {
+  if (typeof deg == 'object') throw new TypeError('Geo.toDMS - deg is [DOM?] object');
+  if (isNaN(deg)) return null;  // give up here if we can't make a number from deg
+  
+    // default values
+  if (typeof format == 'undefined') format = 'dms';
+  if (typeof dp == 'undefined') {
+    switch (format) {
+      case 'd': dp = 4; break;
+      case 'dm': dp = 2; break;
+      case 'dms': dp = 0; break;
+      default: format = 'dms'; dp = 0;  // be forgiving on invalid format
+    }
+  }
+  
+  deg = Math.abs(deg);  // (unsigned result ready for appending compass dir'n)
+  
+  switch (format) {
+    case 'd':
+      d = deg.toFixed(dp);     // round degrees
+      if (d&lt;100) d = '0' + d;  // pad with leading zeros
+      if (d&lt;10) d = '0' + d;
+      dms = d + '\u00B0';      // add º symbol
+      break;
+    case 'dm':
+      var min = (deg*60).toFixed(dp);  // convert degrees to minutes &amp; round
+      var d = Math.floor(min / 60);    // get component deg/min
+      var m = (min % 60).toFixed(dp);  // pad with trailing zeros
+      if (d&lt;100) d = '0' + d;          // pad with leading zeros
+      if (d&lt;10) d = '0' + d;
+      if (m&lt;10) m = '0' + m;
+      dms = d + '\u00B0' + m + '\u2032';  // add º, ' symbols
+      break;
+    case 'dms':
+      var sec = (deg*3600).toFixed(dp);  // convert degrees to seconds &amp; round
+      var d = Math.floor(sec / 3600);    // get component deg/min/sec
+      var m = Math.floor(sec/60) % 60;
+      var s = (sec % 60).toFixed(dp);    // pad with trailing zeros
+      if (d&lt;100) d = '0' + d;            // pad with leading zeros
+      if (d&lt;10) d = '0' + d;
+      if (m&lt;10) m = '0' + m;
+      if (s&lt;10) s = '0' + s;
+      dms = d + '\u00B0' + m + '\u2032' + s + '\u2033';  // add º, ', " symbols
+      break;
+  }
+  
+  return dms;
+}
+
+
+/**
+ * Convert numeric degrees to deg/min/sec latitude (suffixed with N/S)
+ *
+ * @param   {Number} deg: Degrees
+ * @param   {String} [format=dms]: Return value as 'd', 'dm', 'dms'
+ * @param   {Number} [dp=0|2|4]: No of decimal places to use - default 0 for dms, 2 for dm, 4 for d
+ * @returns {String} Deg/min/seconds
+ */
+Geo.toLat = function(deg, format, dp) {
+  var lat = Geo.toDMS(deg, format, dp);
+  return lat==null ? '–' : lat.slice(1) + (deg&lt;0 ? 'S' : 'N');  // knock off initial '0' for lat!
+}
+
+
+/**
+ * Convert numeric degrees to deg/min/sec longitude (suffixed with E/W)
+ *
+ * @param   {Number} deg: Degrees
+ * @param   {String} [format=dms]: Return value as 'd', 'dm', 'dms'
+ * @param   {Number} [dp=0|2|4]: No of decimal places to use - default 0 for dms, 2 for dm, 4 for d
+ * @returns {String} Deg/min/seconds
+ */
+Geo.toLon = function(deg, format, dp) {
+  var lon = Geo.toDMS(deg, format, dp);
+  return lon==null ? '–' : lon + (deg&lt;0 ? 'W' : 'E');
+}
+
+
+/**
+ * Convert numeric degrees to deg/min/sec as a bearing (0º..360º)
+ *
+ * @param   {Number} deg: Degrees
+ * @param   {String} [format=dms]: Return value as 'd', 'dm', 'dms'
+ * @param   {Number} [dp=0|2|4]: No of decimal places to use - default 0 for dms, 2 for dm, 4 for d
+ * @returns {String} Deg/min/seconds
+ */
+Geo.toBrng = function(deg, format, dp) {
+  deg = (Number(deg)+360) % 360;  // normalise -ve values to 180º..360º
+  var brng =  Geo.toDMS(deg, format, dp);
+  return brng==null ? '–' : brng.replace('360', '0');  // just in case rounding took us up to 360º!
+}
+
+
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -  */
+if (!window.console) window.console = { log: function() {} };</pre>
+
+<!-- 2012-10-07: phi, lambda for lat, lon -->
+<!-- 2014-04-27: greek letters throughout, Gudermannian -->
+
+
+</body></html>

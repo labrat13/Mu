@@ -1,0 +1,16 @@
+C:\temp\install\MapView\MapView\obj\Debug\MapView.exe
+C:\temp\install\MapView\MapView\obj\Debug\MapView.pdb
+C:\temp\install\MapView\MapView\bin\Debug\MapView.exe
+C:\temp\install\MapView\MapView\bin\Debug\MapView.pdb
+C:\temp\install\MapView\MapView\obj\Debug\ResolveAssemblyReference.cache
+C:\temp\install\MapView\MapView\obj\Debug\MapView.Form1.resources
+C:\temp\install\MapView\MapView\obj\Debug\MapView.Properties.Resources.resources
+C:\temp\install\MapView\MapView\obj\Debug\MapView.csproj.GenerateResource.Cache
+C:\Documents and Settings\ftyvhbumkklml\Рабочий стол\MapView\MapView\obj\Debug\MapView.exe
+C:\Documents and Settings\ftyvhbumkklml\Рабочий стол\MapView\MapView\obj\Debug\MapView.pdb
+C:\Documents and Settings\ftyvhbumkklml\Рабочий стол\MapView\MapView\bin\Debug\MapView.exe
+C:\Documents and Settings\ftyvhbumkklml\Рабочий стол\MapView\MapView\bin\Debug\MapView.pdb
+C:\Documents and Settings\ftyvhbumkklml\Рабочий стол\MapView\MapView\obj\Debug\ResolveAssemblyReference.cache
+C:\Documents and Settings\ftyvhbumkklml\Рабочий стол\MapView\MapView\obj\Debug\MapView.Form1.resources
+C:\Documents and Settings\ftyvhbumkklml\Рабочий стол\MapView\MapView\obj\Debug\MapView.Properties.Resources.resources
+C:\Documents and Settings\ftyvhbumkklml\Рабочий стол\MapView\MapView\obj\Debug\MapView.csproj.GenerateResource.Cache

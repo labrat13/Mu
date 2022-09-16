@@ -1,0 +1,178 @@
+Исходник старой версии навигатора
+public class AccelerometerPlayActivity extends Activity 
+{
+public void onCreate(Bundle savedInstanceState)
+{
+- блокировка экрана от выключения - mPowerManager, mWakeLock
+- получение экрана устройства - для определения размеров и ориентации.
+ Здесь не нужно, так как ориентация фиксированная. Но пока оставим на будущее.
+- вызываем конструктор TileMapView, он должен инициализировать переменные и классы для работы.
+- setContentView(m...View); - что-то инфраструктурное 
+}
+
+ protected void onResume() { 
+- включаем блокировку экрана
+- запускаем работу устройства - тут не надо, так как вся програма управляется через коллбеки событий от датчиков.
+}
+
+protected void onPause() {
+- останавливаем датчики, они прекращают подавать события, и приложение стоит.
+- освобождаем блокировку экрана
+}
+
+ class SimulationView extends View implements LocationListener{
+
+public SimulationView(Context context) throws Exception {
+инициализация
+- если внешнее хранилище недоступно, выдаем исключение. Это завершит приложение.
+и без уведомления пользователя о причине. Это нехорошо, надо переделать.
+- получаем путь к сдкарте
+
+- загружаем номап картинку тилы. Если тила не загрузилась, выводим сообщение и исключение.
+- загружаем прочие файлы иконок
+
+- создаем словарь кеша тил, пустой
+- создаем TileGridManager конструктором
+- m_tileGridManager.updateDisplaySize(mDisplay.getWidth(), mDisplay.getHeight(), mDisplay.getRotation());
+  это передаем в менеджер размеры экрана и его ориентацию. Однако она изменится после какого-то события.
+  И лучше это делать из специального коллбека. А сейчас ориентация фиксированная и ничего передавать не надо.
+- устанавливаем масштаб тил = 8
+- создаем LocationManager и открываем гпс сенсор. 
+- m_LocationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 1000, 1, this);
+  обновления позиции каждую секунду вполне достаточно.
+- создаем прямоугольники для рисования итд, чтобы не создавать их в onDraw();
+}
+
+
+protected void onSizeChanged(int w, int h, int oldw, int oldh) {
+коллбек вызывается при изменении размеров экрана
+  m_tileGridManager.updateDisplaySize(w, h, mDisplay.getRotation());
+  loadTileCache(getTileCacheList()); - обновляет кеш тил по списку необходимых тил
+  invalidate(); - предписывает обновить окно
+}
+
+так как гпс сенсор запущен, то теперь код управляется либо еого событиями, либо событиями тачскрина.
+
+public boolean onTouchEvent(MotionEvent event)
+{
+- коллбек приносит координаты клика по экрану.
+на экране есть две кнопки зумплюс и зумминус, если в одну из них попадает клик, то
+переменная m_ZoomLevel изменяется, и вызываются
+m_tileGridManager.updateZoom(m_ZoomLevel);
+loadTileCache(getTileCacheList()); - обновляет кеш тил по списку необходимых тил
+invalidate(); - предписывает обновить окно
+}
+
+protected void onDraw(Canvas canvas) {
+перерисовывание экрана
+- рисуем фон - это не нужно, экран и так весь заполняется тилами.
+- ArrayList<TileRecord> tilerecords = this.m_tileGridManager.getTileRecordList();
+получаем список объектов с координатами тил для рисования. Это несколько коряво сделано, не все используется.
+- String tile = this.createTilePathName(tr.m_tileX, tr.m_tileY, this.m_ZoomLevel);
+для каждой тилы создаем  короткое имя-ключ, под которым они должны храниться в словаре кеша.
+- добываем тилу из кеша
+- рисуем тилу по прямоугольникам из TileRecord. Тут надо отметить, что прямоугольники не обрезанные, 
+поэтому они выходят за пределы экрана, но обрезаются инфраструктурой устройства
+так что обрезать в прямоугольниках не надо.
+И еще - когда тилы рисуются, между ними остаются полоски в один пиксел
+- рисуем метку позиции поверх тил, полупрозрачной красной точкой.
+- рисуем картинки кнопок в их прямоугольниках 
+}
+
+GPS события
+- это событие смены координат. Оно запускает всю работу - смену тил и перерисовку экрана
+@Override
+public void onLocationChanged(Location arg0) {
+	// TODO Auto-generated method stub
+	m_tileGridManager.updateGpsPosition(m_ZoomLevel, arg0.getLongitude(), arg0.getLatitude());
+	//update tile cache
+	loadTileCache(getTileCacheList());
+	//redraw state
+	this.invalidate();
+}
+
+- это событие выключения гпса его так и используем
+@Override
+public void onProviderDisabled(String arg0) {
+	// TODO Auto-generated method stub
+	Toast.makeText(getBaseContext(), "Gps turned OFF", Toast.LENGTH_LONG).show();
+}
+
+-это событие включения гпса, его так и используем для всплывающих сообщений
+@Override
+public void onProviderEnabled(String arg0) {
+	// TODO Auto-generated method stub
+	Toast.makeText(getBaseContext(), "Gps turned ON", Toast.LENGTH_LONG).show();
+}
+
+- тут ничего не делаем,
+@Override
+public void onStatusChanged(String arg0, int arg1, Bundle arg2) {
+	// TODO Auto-generated method stub
+	
+}
+
+
+важные функции
+public class TileGridManager {
+ private void createTileGrid(long tilex, long tiley)
+{
+ строит сетку тил так, чтобы позиция гпс была в центре. 
+Сейчас это не годится, так как центром должна быть произвольная точка, а позиция гпс только отображается на карте.
+
+Но рассмотрим как устроено
+-очистить список необходимых тил
+- создать большой прямоугольник для всего экрана с центром в позиции гпс
+-получить координаты первой тилы по левому верхнем углу экрана
+- получить позицию в тиле для левого верхнео угла экрана
+- получим таким же образом координаты и смещение для центральной тилы.
+- создаем сетку 5х3 тил в циклах по х и у. Сразу в цикле впишем в объекты списка тил номера 
+как смещение по соответствующей оси + номер центральной тилы.
+Тут же если это центральная тила, установим координаты прямоугольника метки позиции.
+- внесем исправление в координаты тил = расстоянию по каждой оси от точки позиции до точки середины экрана	
+это где-то что-то недоучли, теперь исправили. Надо сразу все сделать.
+-ну и соответственно сместить прямоугольник метки позиции
+На выходе фугнкции имеем список необходимых тил и прямоугольников их рисования.
+private ArrayList<TileRecord> m_tileRecords; его получает
+public ArrayList<TileRecord> getTileRecordList() и передает список в 
+onDraw, там из него выбираются записи о тилах для отображения на экране.
+и еще в getTileCacheList(), в котором формируется список ключей тил и передается для обновления кеша тил.
+}
+
+
+	private void updateGrid() {
+
+		long tilex;
+		long tiley;
+		
+		//вычислить координаты тилы по координатам гпс
+		PointF ptf = WorldToTilePos(m_gpsLong, m_gpsLat, m_zoomLevel);
+		//calc point in tile pixels
+		tilex = (long) (ptf.x * 256);
+		tiley = (long) (ptf.y * 256);		
+		//создать статическую сетку тил.
+		createTileGrid(tilex, tiley);
+		//описать позицию центра курсора
+		//так он же в центре экрана должен быть, зачем его еще прописывать тут? Надо только проверить, что он там где надо.
+		//для отладки надо его. Сейчас это сразу с созданием сетки делается
+	}
+
+	//update gps position for new grid
+	public void updateGpsPosition(int zoomlevel, double longitude, double latitude)
+	{
+		//fill up tile list
+		m_zoomLevel = zoomlevel;
+		m_gpsLong = longitude;
+		m_gpsLat = latitude;
+		updateGrid();
+	}
+
+
+
+Если сделать динамическую сетку тил, то она будет работать на всяких устройствах, и без фиксации ориентации. но тогда надо усложнять отрисовку всего остального.
+пока это неактуально, оставим фиксированную сетку.
+
+
+
+
+
